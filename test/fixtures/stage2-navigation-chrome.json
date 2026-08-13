@@ -1,0 +1,52 @@
+{
+  "source": "anonymized Chrome + Tampermonkey real-page observation, 2026-08-13",
+  "route": "https://www.douyin.com/?recommend=1",
+  "probe": {
+    "file": "tools/stage2-navigation-probe.user.js",
+    "version": "0.1.0",
+    "mode": "native-click",
+    "ordinaryRouteInert": true,
+    "optInParameterConsumed": true
+  },
+  "control": {
+    "selector": "[data-e2e=\"video-switch-next-arrow\"]",
+    "visibleCount": 1,
+    "pointerEvents": "auto"
+  },
+  "trustedBrowserBaseline": {
+    "samples": 1,
+    "confirmed": 1,
+    "activeIdentityChanged": true,
+    "elapsedMs": 588
+  },
+  "tampermonkeyProgrammaticRuns": [
+    {
+      "run": 1,
+      "outcome": "confirmed",
+      "clickCount": 1,
+      "activeIdentityChanged": true,
+      "elapsedMs": 2177
+    },
+    {
+      "run": 2,
+      "outcome": "confirmed",
+      "clickCount": 1,
+      "activeIdentityChanged": true,
+      "elapsedMs": 2280
+    },
+    {
+      "run": 3,
+      "outcome": "confirmed",
+      "clickCount": 1,
+      "activeIdentityChanged": true,
+      "elapsedMs": 2099
+    }
+  ],
+  "identity": {
+    "activeSelector": "[data-e2e=\"feed-active-video\"][data-e2e-vid]",
+    "activeCount": 1,
+    "shape": "19-digit decimal string",
+    "rawValuesRetained": false
+  },
+  "accountStateActions": []
+}

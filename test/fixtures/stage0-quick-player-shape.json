@@ -1,0 +1,32 @@
+{
+  "source": "anonymized QuickPlayer object shape, 2026-08-13",
+  "root": {
+    "awemeInfo": {
+      "awemeId": "0000000000000000000",
+      "desc": "<description>",
+      "caption": "<caption>",
+      "textExtra": [
+        {
+          "hashtagName": "<hashtag>",
+          "start": 0,
+          "end": 9
+        }
+      ],
+      "music": {
+        "id": "0000000000000000000",
+        "title": "<music-title>",
+        "musicName": "<music-name>"
+      }
+    },
+    "isFromLynx": false,
+    "removeSlideListButton": false
+  },
+  "extractionContract": {
+    "videoIdPath": "$.awemeInfo.awemeId",
+    "descriptionPaths": ["$.awemeInfo.desc", "$.awemeInfo.caption"],
+    "hashtagPath": "$.awemeInfo.textExtra[].hashtagName",
+    "musicPaths": ["$.awemeInfo.music.title", "$.awemeInfo.music.musicName"],
+    "association": "awemeInfo.awemeId === activeCard.data-e2e-vid",
+    "failOpenWhenMissingOrConflicting": true
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "source": "anonymized Edge real-page observation, 2026-08-13",
+  "route": "https://www.douyin.com/?recommend=1",
+  "feed": {
+    "activeListSelector": "[data-e2e=\"slideList\"][data-active=\"true\"]",
+    "activeListCount": 1,
+    "activeCardSelector": "[data-e2e=\"feed-active-video\"][data-e2e-vid]",
+    "activeCardCount": 1,
+    "inactiveCardSelector": "[data-e2e=\"feed-video\"][data-e2e-vid]",
+    "windowSize": 3,
+    "activeIndex": 1,
+    "windowPositions": ["previous", "active", "next"],
+    "documentScrollY": 0,
+    "movement": "virtual-list-transform"
+  },
+  "identity": {
+    "cardAttribute": "data-e2e-vid",
+    "shape": "19-digit decimal string",
+    "descendantLinkParameters": ["aweme_id", "gid"],
+    "sampleRelation": "aweme_id === gid === data-e2e-vid"
+  },
+  "text": {
+    "ownerSelector": "[data-e2e=\"video-desc\"]",
+    "excludedSelectors": [
+      "[data-e2e=\"feed-video-nickname\"]",
+      "[data-e2e=\"chapter-container\"]"
+    ],
+    "mixedContainerNotAllowed": "[data-e2e=\"video-info\"]"
+  },
+  "navigationBaseline": {
+    "action": "trusted ArrowDown",
+    "samples": 12,
+    "confirmed": 12,
+    "confirmation": "active data-e2e-vid changed",
+    "observedUpperBoundMs": [150, 257],
+    "note": "includes browser-control overhead; not an internal event latency measurement",
+    "programmablePathVerified": false
+  }
+}

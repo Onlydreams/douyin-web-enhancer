@@ -1,0 +1,20 @@
+{
+  "source": "anonymized Edge real-page observation, 2026-08-13",
+  "requestPath": "/aweme/v1/web/danmaku/get_v2/",
+  "ownerSelector": "[data-danmu-id]",
+  "ownerTag": "DIV",
+  "idShape": "19-digit decimal string",
+  "observedAttributes": [
+    "class",
+    "data-danmaku-user-id",
+    "data-danmu-id",
+    "data-digg-count",
+    "data-is-danmu-author",
+    "data-is-like"
+  ],
+  "directChildTags": ["DIV", "DIV", "DIV"],
+  "maxConcurrentObserved": 2,
+  "textContentRedacted": true,
+  "nodeReuseObserved": false,
+  "nodeReuseStillRequiredAsDefensiveContract": true
+}

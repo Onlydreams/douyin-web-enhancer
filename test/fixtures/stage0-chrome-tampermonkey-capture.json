@@ -1,0 +1,152 @@
+{
+  "source": "anonymized Chrome and Tampermonkey Stage 0 captures, 2026-08-13",
+  "route": "https://www.douyin.com/?recommend=1&dwe_stage0_probe=capture",
+  "probe": {
+    "fullCaptureVersion": "0.2.0",
+    "currentInstalledVersion": "0.2.1",
+    "currentOfflineProbeVersion": "0.2.1",
+    "explicitMode": "capture",
+    "captureLimitMs": 30000,
+    "ordinaryRouteIsInert": true,
+    "pageDomWrites": 0,
+    "mediaWrites": 0,
+    "navigationActions": 0,
+    "extraNetworkRequests": 0,
+    "currentOfflineTestsPassed": 17,
+    "currentBrowserSmokePassed": true
+  },
+  "injection": {
+    "startedReadyState": "loading",
+    "startedWithDocumentElement": true,
+    "gmInfoAvailable": true,
+    "modernGmInfoAvailable": true,
+    "unsafeWindowAvailable": true,
+    "pageRootSameAsScriptRoot": false,
+    "fetchWrapped": true,
+    "xhrWrapped": true,
+    "firstObservedXhrOpenMs": 226,
+    "firstObservedFetchCallMs": 2622
+  },
+  "feedTransport": {
+    "path": "/aweme/v1/web/tab/feed/",
+    "transport": "XMLHttpRequest",
+    "method": "GET",
+    "requestBodyPresent": false,
+    "status": 200,
+    "contentType": "application/json",
+    "responseSizeBucket": "<=1MiB",
+    "scannedObjects": 863,
+    "scanTruncated": false,
+    "metadataShapes": [
+      {
+        "videoIdKeys": ["aweme_id"],
+        "musicContainerKey": "music",
+        "musicNameKeys": ["title"],
+        "idFieldsConsistent": true,
+        "count": 5
+      }
+    ],
+    "containsRawIdentifierOrMusicValue": false
+  },
+  "initialMediaTiming": {
+    "firstVideoObservedMs": 1902,
+    "firstFrameAfterObservationMs": 2055,
+    "firstStandardActiveCardObservedMs": 3414,
+    "firstVideoContextAtObservation": {
+      "semanticAncestors": [],
+      "videoIdPresentWithin16Ancestors": false
+    },
+    "firstVideoContextAtFrame": {
+      "semanticAncestors": [],
+      "videoIdPresentWithin16Ancestors": false
+    },
+    "preloadedVideoContext": {
+      "observedMs": 3993,
+      "firstFrameAfterObservationMs": 4748,
+      "semanticAncestors": ["feed-video", "feed-item", "slideList"],
+      "videoIdShape": "19-digit decimal",
+      "videoIdAncestorDepth": 7
+    },
+    "nativeMutedDuringCapture": true,
+    "systemAudioSampled": false
+  },
+  "navigationBaselines": [
+    {
+      "surface": "Chrome browser-control key input",
+      "target": "current page",
+      "samples": 4,
+      "confirmedActivityIdChanges": 2
+    },
+    {
+      "surface": "Chrome browser-control key input",
+      "target": "active slideList",
+      "attemptedSamples": 3,
+      "confirmedActivityIdChanges": 1,
+      "endedWithTransientMissingStandardActiveCard": true
+    }
+  ],
+  "danmaku": {
+    "observedWithReuseAwareProbe": 3,
+    "identifierShape": "19-digit decimal",
+    "directChildren": 3,
+    "textPresent": true,
+    "inPlaceTextChangesObserved": 0,
+    "nodeReuseObserved": 0
+  },
+  "recovery": {
+    "ordinaryRoute": "https://www.douyin.com/?recommend=1",
+    "activeFeedCount": 1,
+    "standardActiveCardCount": 1,
+    "videoCount": 3,
+    "probeReportLogs": 0,
+    "probeErrors": 0
+  },
+  "narrowSmoke021": {
+    "scope": [
+      "XHR response parsing is deferred from loadend settlement",
+      "automatic timeout produces one final report and stops capture",
+      "ordinary route remains inert"
+    ],
+    "requestStimulus": "one trusted browser ArrowDown; not navigation capability evidence",
+    "capture": {
+      "stoppedReason": "capture-timeout",
+      "elapsedMsBucket": "30s",
+      "activeAfterStop": false,
+      "finalReportCount": 1,
+      "events": 135,
+      "droppedEvents": 0
+    },
+    "feedXhr": {
+      "path": "/aweme/v1/web/tab/feed/",
+      "method": "GET",
+      "requestBodyPresent": false,
+      "status": 200,
+      "contentType": "application/json",
+      "settleContainsResponseSummary": false,
+      "separateAsyncShapeEvent": true,
+      "parsed": true,
+      "source": "response-text",
+      "responseSizeBucket": "<=1MiB",
+      "scannedObjects": 976,
+      "scanTruncated": false,
+      "metadataShapes": [
+        {
+          "videoIdKeys": ["aweme_id"],
+          "musicContainerKey": "music",
+          "musicNameKeys": ["title"],
+          "idFieldsConsistent": true,
+          "count": 6
+        }
+      ],
+      "containsRawUrlIdentifierOrMusicValue": false
+    },
+    "ordinaryRoute": {
+      "route": "https://www.douyin.com/?recommend=1",
+      "activeFeedCount": 1,
+      "standardActiveCardCount": 1,
+      "videoCount": 2,
+      "newProbeReportLogs": 0,
+      "probeErrors": 0
+    }
+  }
+}

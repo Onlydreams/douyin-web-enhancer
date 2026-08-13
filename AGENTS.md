@@ -4,11 +4,12 @@
 
 ## 项目状态与权威来源
 
-- 当前项目处于设计阶段，尚无可安装脚本。
-- 当前技术方案以 `docs/2026-08-13-douyin-userscript-design.md` 为权威来源。
-- 正式实现后，仓库根目录的 `douyin-web-enhancer.user.js` 同时作为源代码和可安装产物，不存在构建步骤。
+- 当前可安装版本为 `1.0.0`，处于 Stage 5 发布候选；尚未闭环的 Network、独立性能和 15 分钟生命周期验收必须继续如实标记。
+- 根目录的 `douyin-web-enhancer.user.js` 同时是运行时权威源代码和可安装产物，不存在构建步骤。
+- `docs/2026-08-13-douyin-userscript-design.md` 描述架构与行为契约；`docs/2026-08-13-stage-*-evidence.md` 保存分层验收和历史失败证据，不得把旧版本记录改写成当前版本通过。
 - `README.md` 描述用户可观察的状态、功能和限制；行为或支持范围变化时必须同步更新。
 - 未实现或未取得对应证据的能力不得写成“当前可用”或“已经验证”。
+- `tools/` 只保存显式启用的诊断探针，不属于日常安装产物；未经离线测试不得安装或运行新探针。
 
 ## 实现原则
 
@@ -41,7 +42,7 @@
 
 ### BGM 名称
 
-- 只匹配 `music.title` 和 `musicName`。
+- 只匹配原声 `music.title/musicName` 和同一视频对象内平台明确关联歌曲的 `relatedMusicAnchor.extra.title`。
 - 首版只允许卡片 `awemeId/gid` 与元数据 ID 精确关联。
 - 禁止用描述、作者、BGM 名称、播放 URL、Feed 顺序或当前缓存唯一性推断视频身份。
 - 无 ID、ID 冲突、同 ID 数据不一致或解析失败时必须 fail-open。
@@ -49,9 +50,9 @@
 
 ## 无感过滤与媒体安全
 
-- “零可听音频”“不超过一个绘制帧”“前台 250ms/100ms”在 Stage 0 完成前都是待验证目标，不是已确认事实。
+- “零可听音频”“不超过一个绘制帧”和前台 250ms/100ms 仍是未完全验证的测量目标，不是 `1.0.0` 的绝对承诺。
 - `document-start + @sandbox raw` 不能被当作必然早于页面 `fetch`、首帧或首个音频采样。
-- 首版默认只考虑带 ownership token 和争用检测的临时 `muted`，不以 `pause()/play()` 作为实现或补救路径。
+- `1.0.0` 不写 `muted`，也不调用 `pause()/play()`；只有 ownership token、争用检测、完整恢复、下一卡不污染及真实音频验收全部通过后，后续版本才可启用媒体写入。
 - 不能用“属性值仍等于脚本写入值”证明媒体所有权。
 - 文档进入后台时立即使当前 epoch 失效并 fail-open；后台标签页不维持待判定空白或临时静音。
 - Feed 根替换的清理顺序固定为：先递增 generation 并 retire 旧 epoch，再取消任务、断开观察和恢复可安全恢复的状态。
@@ -70,7 +71,7 @@
 
 - 使用 Node 18+ 内置 `node:test`，不为测试引入第三方依赖。
 - 纯匹配、状态机、元数据提取和关联使用纯函数或 runtime Adapter 测试。
-- 控制器测试必须覆盖 generation/epoch 失效、根替换、迟到回调、配置 revision、后台切换、连续跳过熔断、媒体争用和完整清理。
+- 控制器测试必须覆盖 generation/epoch 失效、根替换、迟到回调、配置 revision、后台切换、连续跳过熔断和完整清理；若后续启用媒体写入，还必须覆盖媒体争用、恢复和下一卡不污染。
 - 传输包装测试必须验证原调用的参数、`this`、Promise/Response 语义不变，解析 clone 不消费页面响应，卸载不覆盖后来者。
 - 非平凡分支、循环、解析、媒体状态、异步和 IO 逻辑必须有可运行回归测试。
 - 本地测试不能证明 Tampermonkey 注入时序、真实 DOM、首帧、音频输出或浏览器自动播放行为。
@@ -101,7 +102,10 @@ git diff --check
 
 - 项目使用 MIT License。
 - 用户可见行为变化时同步更新 Userscript 元数据和 README。
-- 未进入正式发布流程时，不为普通开发改动自动提升版本。
+- `@name` 和 `@namespace` 是脚本身份，正式发布后不得随意修改；`@author`、`@homepageURL`、`@supportURL` 和 `@license` 必须与公开仓库信息一致。
+- 保持 `@match https://www.douyin.com/*`、`@run-at document-start`、`@sandbox raw` 和 `@noframes`；权限变化必须有明确功能必要性和实页证据。
+- 不声明 `GM_xmlhttpRequest`、`@connect` 或 `window.onurlchange`；不手工添加由发布平台管理的 `@updateURL`、`@downloadURL` 或 `@installURL`。
+- 未进入正式发布流程时，不为普通开发改动自动提升版本；发布脚本代码或元数据变化时必须提升 `@version`，并同步 README 与当前验收报告。
 - 修改前检查工作树和当前分支，只处理本次任务范围内文件。
 - 未经用户明确要求，不提交、不推送、不创建发布或 PR。
 - 用户明确要求提交时，只暂存目标文件；提交前完成格式、敏感信息和验证检查。
