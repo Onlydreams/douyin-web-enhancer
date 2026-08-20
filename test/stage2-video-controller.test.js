@@ -144,6 +144,7 @@ function createControllerHarness(options = {}) {
   let nowMs = 0;
   let activeCard = options.activeCard;
   let emitBgmMetadata = () => {};
+  let bgmObserving = false;
   const cards = options.cards;
   const nextControl = createElement({
     matches(selector) {
@@ -180,6 +181,7 @@ function createControllerHarness(options = {}) {
   const document = {
     visibilityState: options.visibilityState ?? 'visible',
     documentElement,
+    scripts: options.scripts ?? [],
     createElement: () => createElement({ isConnected: false }),
     querySelectorAll(selector) {
       if (selector === enhancer.PAGE_SELECTORS.feedRoot) return [rootElement];
@@ -265,11 +267,10 @@ function createControllerHarness(options = {}) {
     },
     createBgmTransportObserver(_pageRoot, observerOptions) {
       emitBgmMetadata = observerOptions.onMetadata;
-      let observing = false;
       return {
-        start() { observing = true; return true; },
-        stop() { observing = false; return true; },
-        emit(items) { if (observing) emitBgmMetadata(items); },
+        start() { bgmObserving = true; return true; },
+        stop() { bgmObserving = false; return true; },
+        emit(items) { if (bgmObserving) emitBgmMetadata(items); },
       };
     },
   });
@@ -302,8 +303,16 @@ function createControllerHarness(options = {}) {
     timers,
     intervals,
     observers,
+    isBgmObserving: () => bgmObserving,
     frames,
     flushFrames,
+    runHealthChecks() {
+      for (const interval of intervals.values()) interval.callback();
+      flushFrames();
+    },
+    setHref(nextHref) {
+      root.location.href = nextHref;
+    },
     switchActive,
     advance(ms) {
       nowMs += ms;
@@ -344,6 +353,250 @@ function combinedSettings(videoKeywords, bgmKeywords) {
   });
 }
 
+test('SPA route health checks do not rescan all inline BGM scripts', () => {
+  const card = createCard('1111111111111111111', '允许内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const scripts = [];
+  const harness = createControllerHarness({
+    cards: [card],
+    activeCard: card,
+    scripts,
+  });
+  harness.controller.start(combinedSettings('', '音乐'));
+  harness.flushFrames();
+
+  let textReads = 0;
+  scripts.push({
+    get textContent() {
+      textReads += 1;
+      return 'createQuickPlayer({})';
+    },
+  });
+  harness.setHref('https://www.douyin.com/jingxuan');
+  harness.runHealthChecks();
+  harness.setHref('https://www.douyin.com/?recommend=1');
+  harness.runHealthChecks();
+
+  assert.equal(textReads, 0);
+});
+
+test('evicted feed cards immediately release script ownership', () => {
+  const first = createCard('1111111111111111111', '允许内容').card;
+  const second = createCard('2222222222222222222', '允许内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [first, second], activeCard: first });
+  harness.controller.start(settings('不命中'));
+  harness.flushFrames();
+  assert.ok(harness.controller.snapshot().ownedCardCount >= 2);
+
+  second.isConnected = false;
+  harness.rootElement.setQuery(enhancer.PAGE_SELECTORS.feedCard, [first]);
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'childList',
+      target: harness.rootElement,
+      addedNodes: [],
+      removedNodes: [second],
+    }]);
+  }
+  harness.flushFrames();
+
+  assert.equal(second.hasAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), false);
+  assert.equal(harness.controller.snapshot().ownedCardCount, 1);
+});
+
+test('a card moved within the feed keeps its script ownership', () => {
+  const first = createCard('1111111111111111111', '允许内容').card;
+  const moved = createCard('2222222222222222222', '允许内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [first, moved], activeCard: first });
+  harness.controller.start(settings('不命中'));
+  harness.flushFrames();
+
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'childList',
+      target: harness.rootElement,
+      addedNodes: [moved],
+      removedNodes: [moved],
+    }]);
+  }
+  harness.flushFrames();
+
+  assert.equal(moved.hasAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), true);
+  assert.equal(harness.controller.snapshot().ownedCardCount, 2);
+});
+
+test('evicting the active card retires its epoch before releasing ownership', () => {
+  const active = createCard('1111111111111111111', '允许内容').card;
+  const next = createCard('2222222222222222222', '允许内容').card;
+  active.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [active, next], activeCard: active });
+  harness.controller.start(settings('不命中'));
+  harness.flushFrames();
+  assert.equal(harness.controller.snapshot().currentState, 'allow');
+
+  active.isConnected = false;
+  harness.rootElement.setQuery(enhancer.PAGE_SELECTORS.feedCard, [next]);
+  harness.rootElement.setQuery(enhancer.PAGE_SELECTORS.activeCard, []);
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'childList',
+      target: harness.rootElement,
+      addedNodes: [],
+      removedNodes: [active],
+    }]);
+  }
+  harness.flushFrames();
+
+  assert.equal(harness.controller.snapshot().currentState, null);
+  assert.equal(active.hasAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), false);
+});
+
+test('equivalent normalized BGM settings do not rescan inline scripts', () => {
+  const card = createCard('1111111111111111111', '允许内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const scripts = [];
+  const harness = createControllerHarness({ cards: [card], activeCard: card, scripts });
+  harness.controller.start(combinedSettings('', '音乐 | 音乐'));
+  harness.flushFrames();
+  let textReads = 0;
+  scripts.push({
+    get textContent() {
+      textReads += 1;
+      return 'createQuickPlayer({})';
+    },
+  });
+
+  harness.controller.updateSettings(combinedSettings('', '音乐'));
+
+  assert.equal(textReads, 0);
+});
+
+test('enabling BGM at runtime does not synchronously scan existing inline scripts', () => {
+  const card = createCard('1111111111111111111', '允许内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  let textReads = 0;
+  const scripts = [{
+    get textContent() {
+      textReads += 1;
+      return 'createQuickPlayer({})';
+    },
+  }];
+  const harness = createControllerHarness({ cards: [card], activeCard: card, scripts });
+  harness.controller.start(combinedSettings('', ''));
+  harness.flushFrames();
+
+  harness.controller.updateSettings(combinedSettings('', '音乐'));
+
+  assert.equal(textReads, 0);
+});
+
+test('BGM rules start the bounded transport without scanning existing inline scripts', () => {
+  const card = createCard('1111111111111111111', '允许内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  let textReads = 0;
+  const scripts = [{
+    get textContent() {
+      textReads += 1;
+      return 'createQuickPlayer({})';
+    },
+  }];
+  const harness = createControllerHarness({ cards: [card], activeCard: card, scripts });
+
+  harness.controller.start(combinedSettings('', '音乐'));
+  harness.flushFrames();
+
+  assert.equal(harness.isBgmObserving(), true);
+  assert.equal(textReads, 0);
+});
+
+test('controller errors stop the BGM transport and leave a fully stopped state', () => {
+  const { card } = createCard('1111111111111111111', '允许内容');
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [card], activeCard: card });
+  harness.controller.start(combinedSettings('视频词', '音乐'));
+  harness.flushFrames();
+  const originalQuery = harness.rootElement.querySelectorAll;
+  harness.rootElement.querySelectorAll = (selector) => {
+    if (selector === enhancer.PAGE_SELECTORS.activeCard) {
+      throw new Error('broken active-card adapter');
+    }
+    return originalQuery.call(harness.rootElement, selector);
+  };
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'attributes',
+      target: card,
+      addedNodes: [],
+      removedNodes: [],
+    }]);
+  }
+  harness.flushFrames();
+
+  assert.equal(harness.controller.snapshot().started, false);
+  assert.equal(harness.isBgmObserving(), false);
+  assert.equal(harness.controller.snapshot().ownedCardCount, 0);
+});
+
+test('a predictive deviation caused by manual navigation does not count as a script skip', () => {
+  const first = createCard('1111111111111111111', '允许内容', {
+    top: 0, bottom: 1_000, width: 1_000, height: 1_000,
+  }).card;
+  const blocked = createCard('2222222222222222222', '命中内容', {
+    top: 1_000, bottom: 2_000, width: 1_000, height: 1_000,
+  }).card;
+  const manualTarget = createCard('3333333333333333333', '允许内容', {
+    top: 2_000, bottom: 3_000, width: 1_000, height: 1_000,
+  }).card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({
+    cards: [first, blocked, manualTarget],
+    activeCard: first,
+  });
+  harness.controller.start(settings('命中'));
+  harness.flushFrames();
+  harness.dispatch('click', {
+    isTrusted: true,
+    target: harness.nextControl,
+    preventDefault() {},
+    stopImmediatePropagation() {},
+  });
+
+  harness.switchActive(manualTarget);
+
+  assert.equal(harness.controller.snapshot().skipCount, 0);
+});
+
+test('danmaku-only settings updates do not rescan inline BGM scripts', () => {
+  const card = createCard('1111111111111111111', '允许内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const scripts = [];
+  const harness = createControllerHarness({ cards: [card], activeCard: card, scripts });
+  const initial = enhancer.createSettingsSnapshot({
+    video: { enabled: false, keywords: '' },
+    danmaku: { enabled: true, keywords: '旧词' },
+    bgm: { enabled: true, keywords: '音乐' },
+  });
+  harness.controller.start(initial);
+  harness.flushFrames();
+  let textReads = 0;
+  scripts.push({
+    get textContent() {
+      textReads += 1;
+      return 'createQuickPlayer({})';
+    },
+  });
+
+  harness.controller.updateSettings(enhancer.createSettingsSnapshot({
+    video: { enabled: false, keywords: '' },
+    danmaku: { enabled: true, keywords: '新词' },
+    bgm: { enabled: true, keywords: '音乐' },
+  }));
+
+  assert.equal(textReads, 0);
+});
+
 test('BGM metadata uses the same navigation path as a video keyword hit', () => {
   const first = createCard('1111111111111111111', '允许内容').card;
   const second = createCard('2222222222222222222', '允许内容').card;
@@ -353,12 +606,19 @@ test('BGM metadata uses the same navigation path as a video keyword hit', () => 
   harness.flushFrames();
   assert.equal(harness.controller.snapshot().currentState, 'pending');
 
-  harness.emitBgm([{
-    awemeId: '1111111111111111111',
-    musicTitle: '原声名称',
-    musicName: '',
-    relatedMusicTitle: '目标音乐',
-  }]);
+  const script = createElement({
+    textContent: 'createQuickPlayer({awemeInfo:{awemeId:"1111111111111111111",music:{title:"目标音乐"}}})',
+  });
+  script.tagName = 'SCRIPT';
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'childList',
+      target: harness.document.documentElement,
+      addedNodes: [script],
+      removedNodes: [],
+    }]);
+  }
+  harness.flushFrames();
 
   assert.equal(harness.nextControl.clickCount, 1);
   assert.equal(harness.controller.snapshot().currentState, 'navigating');

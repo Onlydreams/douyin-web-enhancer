@@ -40,6 +40,7 @@ function createElement(options = {}) {
       node.isConnected = true;
     },
     matches(selector) {
+      options.onMatches?.(selector);
       if (selector === enhancer.PAGE_SELECTORS.feedCard) {
         return (
           ['feed-video', 'feed-active-video'].includes(
@@ -309,6 +310,9 @@ function createHarness({
       flushFrames();
     },
     getFeedRootQueryCount: () => feedRootQueryCount,
+    setHref(nextHref) {
+      root.location.href = nextHref;
+    },
     switchActive(nextCard) {
       currentActiveCard.setAttribute('data-e2e', 'feed-video');
       nextCard.setAttribute('data-e2e', 'feed-active-video');
@@ -512,6 +516,90 @@ test('a child-list mutation never scans the unrelated target subtree', () => {
   }]);
 
   assert.equal(targetDescendantQueries, 0);
+});
+
+test('one global mutation batch has one shared added-element budget', () => {
+  const root = createDanmakuRoot([]);
+  const card = createCard('1111111111111111111', root);
+  const harness = createHarness({ cards: [card], activeCard: card });
+  harness.controller.start(combinedSettings('视频词', ''));
+  harness.flushFrames();
+
+  let feedRootMatchChecks = 0;
+  const addedNodes = Array.from({ length: 100 }, () =>
+    createElement({
+      onMatches(selector) {
+        if (selector === enhancer.PAGE_SELECTORS.feedRoot) {
+          feedRootMatchChecks += 1;
+        }
+      },
+    }),
+  );
+  for (const node of addedNodes) {
+    node.parentElement = harness.document.documentElement;
+  }
+  harness.emit(harness.document.documentElement, [{
+    type: 'childList',
+    target: harness.document.documentElement,
+    addedNodes,
+    removedNodes: [],
+  }]);
+
+  assert.equal(feedRootMatchChecks, 64);
+});
+
+test('one global mutation batch has a bounded mutation-record budget', () => {
+  const root = createDanmakuRoot([]);
+  const card = createCard('1111111111111111111', root);
+  const harness = createHarness({ cards: [card], activeCard: card });
+  harness.controller.start(combinedSettings('视频词', ''));
+  harness.flushFrames();
+
+  let inspectedRecords = 0;
+  const mutations = Array.from({ length: 200 }, () => ({
+    type: 'childList',
+    target: harness.document.documentElement,
+    get addedNodes() {
+      inspectedRecords += 1;
+      return [];
+    },
+    removedNodes: [],
+  }));
+  harness.emit(harness.document.documentElement, mutations);
+
+  assert.equal(inspectedRecords, 64);
+});
+
+test('an unsupported route does not inspect added nodes for feed signals', () => {
+  const root = createDanmakuRoot([]);
+  const card = createCard('1111111111111111111', root);
+  const harness = createHarness({ cards: [card], activeCard: card });
+  harness.controller.start(combinedSettings('视频词', ''));
+  harness.flushFrames();
+  harness.setHref('https://www.douyin.com/jingxuan?from_nav=1');
+
+  let feedRootMatchChecks = 0;
+  const addedNodes = Array.from({ length: 100 }, () =>
+    createElement({
+      onMatches(selector) {
+        if (selector === enhancer.PAGE_SELECTORS.feedRoot) {
+          feedRootMatchChecks += 1;
+        }
+      },
+    }),
+  );
+  for (const node of addedNodes) {
+    node.parentElement = harness.document.documentElement;
+  }
+  harness.emit(harness.document.documentElement, [{
+    type: 'childList',
+    target: harness.document.documentElement,
+    addedNodes,
+    removedNodes: [],
+  }]);
+
+  assert.equal(feedRootMatchChecks, 0);
+  assert.equal(harness.controller.snapshot().rootConnected, false);
 });
 
 test('empty danmaku fails open after the 100ms watchdog', () => {

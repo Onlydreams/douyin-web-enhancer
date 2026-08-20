@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Douyin Web Enhancer - Stage 0 Probe
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.2.1
+// @version      0.2.1-test
 // @description  Read-only, opt-in Stage 0 timing and structure probe.
 // @match        https://www.douyin.com/*
 // @run-at       document-start

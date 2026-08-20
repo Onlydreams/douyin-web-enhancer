@@ -27,6 +27,7 @@ const createHarness = (initialValues = {}) => {
     start(settings) {
       this.currentSettings = settings;
       controllerUpdates.push({ type: 'start', settings });
+      return true;
     },
     updateSettings(settings) {
       this.currentSettings = settings;
@@ -295,6 +296,12 @@ test('runtime update failure cannot roll the menu back after storage committed',
     [storage.video.enabled]: true,
     [storage.video.keywords]: '旧词',
   });
+  let starts = 0;
+  harness.controller.start = (settings) => {
+    starts += 1;
+    harness.controller.currentSettings = settings;
+    return true;
+  };
   harness.controller.updateSettings = () => {
     throw new Error('runtime failed');
   };
@@ -305,7 +312,107 @@ test('runtime update failure cannot roll the menu back after storage committed',
 
   assert.deepEqual(harness.writes, [[storage.video.keywords, '新词|第二词']]);
   assert.equal([...harness.menus.values()].some(({ label }) => label === '视频关键词屏蔽：已开启（2 个词）'), true);
+  assert.equal(starts, 2);
   assert.equal(harness.errors.length, 1);
+});
+
+test('a runtime that cannot restart is exposed as stopped in every status menu', () => {
+  const storage = stage1.STORAGE_KEYS;
+  const harness = createHarness({
+    [storage.video.enabled]: true,
+    [storage.video.keywords]: '旧词',
+    [storage.bgm.enabled]: true,
+    [storage.bgm.keywords]: '音乐',
+  });
+  let starts = 0;
+  harness.controller.start = (settings) => {
+    starts += 1;
+    if (starts === 1) {
+      harness.controller.currentSettings = settings;
+      return true;
+    }
+    return false;
+  };
+  harness.controller.updateSettings = () => {
+    throw new Error('runtime stopped');
+  };
+  harness.overrides.promptUser = () => '新词';
+  stage1.bootstrap(harness.overrides);
+
+  [...harness.menus.values()].find(({ label }) => label === '编辑视频屏蔽词（1 个）').callback();
+
+  assert.equal(starts, 2);
+  assert.equal(
+    [...harness.menus.values()].filter(({ label }) => label.includes('运行已停止')).length,
+    3,
+  );
+  assert.equal(
+    [...harness.menus.values()].some(
+      ({ label }) => label === '视频关键词屏蔽：运行已停止（已保存 1 个词）',
+    ),
+    true,
+  );
+});
+
+test('clicking a status menu after runtime death restarts without toggling settings', () => {
+  const storage = stage1.STORAGE_KEYS;
+  const harness = createHarness({
+    [storage.video.enabled]: true,
+    [storage.video.keywords]: '屏蔽词',
+  });
+  let starts = 0;
+  harness.controller.start = (settings) => {
+    starts += 1;
+    harness.controller.currentSettings = settings;
+    return true;
+  };
+  const app = stage1.bootstrap(harness.overrides);
+  harness.controller.currentSettings = null;
+
+  [...harness.menus.values()].find(
+    ({ label }) => label === '视频关键词屏蔽：已开启（1 个词）',
+  ).callback();
+
+  assert.equal(starts, 2);
+  assert.deepEqual(harness.writes, []);
+  assert.equal(app.getSettings().video.enabled, true);
+  assert.equal(
+    [...harness.menus.values()].some(
+      ({ label }) => label === '视频关键词屏蔽：已开启（1 个词）',
+    ),
+    true,
+  );
+});
+
+test('editing settings after runtime death restarts directly without a misleading error', () => {
+  const storage = stage1.STORAGE_KEYS;
+  const harness = createHarness({
+    [storage.video.enabled]: true,
+    [storage.video.keywords]: '旧词',
+  });
+  let starts = 0;
+  let updates = 0;
+  harness.controller.start = (settings) => {
+    starts += 1;
+    harness.controller.currentSettings = settings;
+    return true;
+  };
+  harness.controller.updateSettings = () => {
+    updates += 1;
+    throw new Error('must not update a stopped runtime');
+  };
+  harness.overrides.promptUser = () => '新词';
+  stage1.bootstrap(harness.overrides);
+  harness.controller.currentSettings = null;
+
+  [...harness.menus.values()].find(
+    ({ label }) => label === '编辑视频屏蔽词（1 个）',
+  ).callback();
+
+  assert.equal(starts, 2);
+  assert.equal(updates, 0);
+  assert.equal(harness.errors.length, 0);
+  assert.deepEqual(harness.writes, [[storage.video.keywords, '新词']]);
 });
 
 test('Stage 1 controller is inert and stores only settings snapshots', () => {
@@ -319,7 +426,7 @@ test('Stage 1 controller is inert and stores only settings snapshots', () => {
 });
 
 test('metadata grants only local storage and menu capabilities', () => {
-  assert.match(userscriptSource, /@version\s+1\.0\.0/u);
+  assert.match(userscriptSource, /@version\s+0\.0\.1/u);
   assert.match(userscriptSource, /@match\s+https:\/\/www\.douyin\.com\/\*/u);
   assert.match(userscriptSource, /@run-at\s+document-start/u);
   assert.match(userscriptSource, /@sandbox\s+raw/u);
@@ -333,7 +440,7 @@ test('metadata grants only local storage and menu capabilities', () => {
   assert.doesNotMatch(userscriptSource, /@connect\b/u);
 });
 
-test('Stage 4 observes page transport without adding requests or media writes', () => {
+test('Stage 4 adds no requests or media writes', () => {
   assert.match(userscriptSource, /\bMutationObserver\b/u);
   assert.match(userscriptSource, /\bXMLHttpRequest\b/u);
   assert.doesNotMatch(userscriptSource, /\bfetch\s*\(/u);

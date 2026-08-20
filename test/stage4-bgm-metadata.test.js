@@ -90,6 +90,47 @@ test('bounded extraction stops at the node limit', () => {
   assert.ok(result.scanned <= 5);
 });
 
+test('bounded extraction stops at the elapsed-time limit', () => {
+  const payload = { nested: Array.from({ length: 20 }, (_, index) => ({
+    aweme_id: String(10_000_000_000 + index),
+    music: { title: `音乐${index}` },
+  })) };
+  let nowMs = 0;
+  const result = enhancer.extractBgmMetadata(payload, {
+    maxNodes: 100,
+    maxElapsedMs: 3,
+    now: () => nowMs++,
+  });
+
+  assert.equal(result.timedOut, true);
+  assert.ok(result.scanned < 20);
+});
+
+test('one high-fanout node cannot bypass the node budget while enqueuing children', () => {
+  let childReads = 0;
+  const items = new Proxy(
+    Array.from({ length: 10_000 }, (_, index) => ({
+      aweme_id: String(10_000_000_000 + index),
+      music: { title: `音乐${index}` },
+    })),
+    {
+      get(target, property, receiver) {
+        if (/^\d+$/u.test(String(property))) childReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+  const payload = { items };
+  const result = enhancer.extractBgmMetadata(payload, {
+    maxNodes: 5,
+    maxElapsedMs: 100,
+    now: () => 0,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.ok(childReads <= 5, `read ${childReads} children despite a 5-node budget`);
+});
+
 test('cache associates only exact IDs and rejects inconsistent metadata', () => {
   const cache = enhancer.createBgmMetadataCache(2);
   cache.ingest([

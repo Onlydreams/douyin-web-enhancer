@@ -2,9 +2,9 @@
   "source": "anonymized Chrome and Tampermonkey Stage 0 captures, 2026-08-13",
   "route": "https://www.douyin.com/?recommend=1&dwe_stage0_probe=capture",
   "probe": {
-    "fullCaptureVersion": "0.2.0",
-    "currentInstalledVersion": "0.2.1",
-    "currentOfflineProbeVersion": "0.2.1",
+    "fullCaptureVersion": "0.2.0-test",
+    "currentInstalledVersion": "0.2.1-test",
+    "currentOfflineProbeVersion": "0.2.1-test",
     "explicitMode": "capture",
     "captureLimitMs": 30000,
     "ordinaryRouteIsInert": true,

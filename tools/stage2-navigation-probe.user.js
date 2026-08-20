@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Douyin Web Enhancer - Stage 2 Navigation Probe
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.1.0
+// @version      0.1.0-test
 // @description  Opt-in, one-shot probe for Douyin's semantic next-video control.
 // @match        https://www.douyin.com/*
 // @run-at       document-idle

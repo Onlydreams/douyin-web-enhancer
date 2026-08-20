@@ -3,7 +3,7 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      1.0.0
+// @version      0.0.1
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
@@ -94,6 +94,7 @@
   const NAVIGATION_CONFIRM_MS = 2_500;
   const PREDICTIVE_SETTLE_FALLBACK_MS = 350;
   const HEALTH_CHECK_MS = 750;
+  const MAX_MUTATION_RECORDS_PER_BATCH = 64;
   const ALLOW_DWELL_RESET_MS = 3_000;
   const SKIP_WINDOW_MS = 15_000;
   const MAX_CONSECUTIVE_SKIPS = 12;
@@ -235,10 +236,16 @@
   function extractBgmMetadata(payload, options = {}) {
     const maxNodes = Math.max(1, options.maxNodes ?? 2_000);
     const maxDepth = Math.max(1, options.maxDepth ?? 12);
+    const maxElapsedMs = Math.max(1, options.maxElapsedMs ?? 8);
+    const readNow =
+      options.now ??
+      (() => globalThis.performance?.now?.() ?? Date.now());
+    const deadline = readNow() + maxElapsedMs;
     const items = [];
     const stack = [{ value: payload, depth: 0 }];
     let scanned = 0;
     let truncated = false;
+    let timedOut = false;
 
     function extractRelatedMusicTitle(value) {
       const anchors = [
@@ -267,6 +274,11 @@
     }
 
     while (stack.length > 0) {
+      if (readNow() >= deadline) {
+        timedOut = true;
+        truncated = true;
+        break;
+      }
       if (scanned >= maxNodes) {
         truncated = true;
         break;
@@ -306,16 +318,47 @@
       }
 
       if (depth >= maxDepth) continue;
-      const children = Array.isArray(value) ? value : Object.values(value);
-      for (let index = children.length - 1; index >= 0; index -= 1) {
-        const child = children[index];
-        if (child && typeof child === 'object') {
-          stack.push({ value: child, depth: depth + 1 });
+      const remainingSlots = maxNodes - scanned - stack.length;
+      if (remainingSlots <= 0) {
+        truncated = true;
+        continue;
+      }
+
+      // JSON payload 可能包含高扇出数组或对象；先 Object.values() 再压栈会让
+      // 单个节点绕过 maxNodes。只检查剩余预算允许的子项，超出即 fail-open。
+      const children = [];
+      let inspected = 0;
+      if (Array.isArray(value)) {
+        const inspectLimit = Math.min(value.length, remainingSlots);
+        for (let index = 0; index < inspectLimit; index += 1) {
+          inspected += 1;
+          const child = value[index];
+          if (child && typeof child === 'object') children.push(child);
         }
+        if (value.length > inspectLimit) truncated = true;
+      } else {
+        for (const key in value) {
+          if (!Object.hasOwn(value, key)) continue;
+          if (inspected >= remainingSlots) {
+            truncated = true;
+            break;
+          }
+          inspected += 1;
+          const child = value[key];
+          if (child && typeof child === 'object') children.push(child);
+        }
+      }
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({ value: children[index], depth: depth + 1 });
       }
     }
 
-    return Object.freeze({ items: Object.freeze(items), scanned, truncated });
+    return Object.freeze({
+      items: Object.freeze(items),
+      scanned,
+      timedOut,
+      truncated,
+    });
   }
 
   function createBgmMetadataCache(limit = 500) {
@@ -409,9 +452,8 @@
 
   function createBgmTransportObserver(pageRoot, options = {}) {
     const onMetadata = options.onMetadata ?? (() => {});
-    const scheduleMicrotask =
-      options.queueMicrotask ?? pageRoot.queueMicrotask?.bind(pageRoot) ??
-      ((callback) => Promise.resolve().then(callback));
+    const scheduleTask =
+      options.scheduleTask ?? pageRoot.setTimeout?.bind(pageRoot) ?? setTimeout;
     let started = false;
     let originalFetch = null;
     let fetchWrapper = null;
@@ -423,6 +465,8 @@
     let unavailable = false;
     let runSequence = 0;
     let activeRun = 0;
+    let activeBodyRead = 0;
+    let bodyReadSequence = 0;
     const pendingXhrs = new Map();
     const xhrCandidates = new WeakMap();
     const maxResponseChars = options.maxResponseChars ?? 2_000_000;
@@ -444,6 +488,16 @@
       return started && activeRun === run;
     }
 
+    function beginBodyRead(run) {
+      if (!isCurrentRun(run) || activeBodyRead !== 0) return 0;
+      activeBodyRead = ++bodyReadSequence;
+      return activeBodyRead;
+    }
+
+    function finishBodyRead(token) {
+      if (activeBodyRead === token) activeBodyRead = 0;
+    }
+
     function emitPayload(payload, run) {
       const result = extractBgmMetadata(payload);
       if (isCurrentRun(run) && result.items.length > 0) onMetadata(result.items);
@@ -455,13 +509,30 @@
       if (!/application\/json/i.test(contentType)) return;
       const contentLength = Number(response.headers?.get?.('content-length') ?? 0);
       if (contentLength > maxResponseChars) return;
+      const bodyRead = beginBodyRead(run);
+      if (!bodyRead) return;
       let clone;
-      try { clone = response.clone(); } catch { return; }
+      try { clone = response.clone(); } catch {
+        finishBodyRead(bodyRead);
+        return;
+      }
       Promise.resolve(clone.text()).then((text) => {
-        if (!isCurrentRun(run)) return;
-        if (text.length > maxResponseChars) return;
-        try { emitPayload(JSON.parse(text), run); } catch {}
-      }, () => {});
+        try {
+          scheduleTask(() => {
+            try {
+              if (!isCurrentRun(run)) return;
+              if (text.length > maxResponseChars) return;
+              emitPayload(JSON.parse(text), run);
+            } catch {
+              // 解析失败时保持 fail-open；页面自己的响应不受影响。
+            } finally {
+              finishBodyRead(bodyRead);
+            }
+          }, 0);
+        } catch {
+          finishBodyRead(bodyRead);
+        }
+      }, () => finishBodyRead(bodyRead));
     }
 
     function installFetch(run) {
@@ -512,21 +583,31 @@
           const xhr = this;
           const listener = () => {
             cleanupXhr(xhr);
-            scheduleMicrotask(() => {
-              if (!isCurrentRun(run) || xhr.status < 200 || xhr.status >= 300) {
-                return;
-              }
-              const contentType = xhr.getResponseHeader?.('content-type') ?? '';
-              if (!/application\/json/i.test(contentType)) return;
-              try {
-                const raw = xhr.responseType === 'json' ? xhr.response : xhr.responseText;
-                if (typeof raw === 'string' && raw.length > maxResponseChars) return;
-                emitPayload(
-                  typeof raw === 'string' ? JSON.parse(raw) : raw,
-                  run,
-                );
-              } catch {}
-            });
+            const bodyRead = beginBodyRead(run);
+            if (!bodyRead) return;
+            try {
+              scheduleTask(() => {
+                try {
+                  if (!isCurrentRun(run) || xhr.status < 200 || xhr.status >= 300) {
+                    return;
+                  }
+                  const contentType = xhr.getResponseHeader?.('content-type') ?? '';
+                  if (!/application\/json/i.test(contentType)) return;
+                  const raw = xhr.responseType === 'json' ? xhr.response : xhr.responseText;
+                  if (typeof raw === 'string' && raw.length > maxResponseChars) return;
+                  emitPayload(
+                    typeof raw === 'string' ? JSON.parse(raw) : raw,
+                    run,
+                  );
+                } catch {
+                  // 页面响应格式变化时放行，不影响原 XHR。
+                } finally {
+                  finishBodyRead(bodyRead);
+                }
+              }, 0);
+            } catch {
+              finishBodyRead(bodyRead);
+            }
           };
           pendingXhrs.set(xhr, { listener });
           xhr.addEventListener?.('loadend', listener);
@@ -1219,18 +1300,32 @@
       }
     }
 
-    function visitAddedElements(node, visitor, maxElements = 64) {
+    function createAddedElementBudget(maxElements = 64) {
+      return { remaining: Math.max(0, maxElements) };
+    }
+
+    function visitMutationRecords(mutations, visitor) {
+      let visited = 0;
+      for (const mutation of mutations ?? []) {
+        if (visited >= MAX_MUTATION_RECORDS_PER_BATCH) break;
+        visited += 1;
+        visitor(mutation);
+      }
+    }
+
+    function visitAddedElements(node, visitor, budget) {
       // 评论区会产生高频大子树变更；限制单次增量工作，避免观察器退化成整页扫描。
+      const sharedBudget = budget ?? createAddedElementBudget();
+      if (sharedBudget.remaining <= 0) return;
       const queue = [];
       if (node?.nodeType === 1) queue.push(node);
       else for (const child of node?.children ?? []) queue.push(child);
-      let visited = 0;
-      while (queue.length > 0 && visited < maxElements) {
+      while (queue.length > 0 && sharedBudget.remaining > 0) {
         const element = queue.shift();
-        visited += 1;
+        sharedBudget.remaining -= 1;
         visitor(element);
         for (const child of element.children ?? []) {
-          if (queue.length + visited >= maxElements) break;
+          if (queue.length >= sharedBudget.remaining) break;
           queue.push(child);
         }
       }
@@ -1253,10 +1348,10 @@
       if (closest) nodes.add(closest);
     }
 
-    function collectDanmakuNodesFromAddedTree(node, nodes) {
+    function collectDanmakuNodesFromAddedTree(node, nodes, budget) {
       visitAddedElements(node, (element) => {
         if (element.matches?.(PAGE_SELECTORS.danmakuNode)) nodes.add(element);
-      });
+      }, budget);
     }
 
     function handleDanmakuMutations(mutations) {
@@ -1270,10 +1365,11 @@
 
       const affectedNodes = new Set();
       const removedNodes = new Set();
+      const addedElementBudget = createAddedElementBudget();
       for (const mutation of mutations) {
         collectDanmakuNodeFromTarget(mutation.target, affectedNodes);
         for (const node of mutation.addedNodes ?? []) {
-          collectDanmakuNodesFromAddedTree(node, affectedNodes);
+          collectDanmakuNodesFromAddedTree(node, affectedNodes, addedElementBudget);
         }
         for (const node of mutation.removedNodes ?? []) {
           collectDanmakuNodeFromTarget(node, removedNodes);
@@ -1515,13 +1611,13 @@
       if (!script || scannedBgmScripts.has(script)) return;
       scannedBgmScripts.add(script);
       const source = String(script.textContent ?? '');
-      if (!source.includes('createQuickPlayer') || source.length > 200_000) {
+      if (source.length > 200_000 || !source.includes('createQuickPlayer')) {
         return;
       }
       handleBgmMetadata(extractQuickPlayerBgmMetadata(source));
     }
 
-    function syncBgmObserver(scanInlineScripts = false) {
+    function syncBgmObserver() {
       const shouldObserve =
         started &&
         hasEffectiveBgmRule() &&
@@ -1537,13 +1633,9 @@
         } catch (error) {
           reportError('[抖音 Web 增强] BGM 响应观察器启动失败', error);
         }
-        if (scanInlineScripts) {
-          for (const script of Array.from(documentLike?.scripts ?? [])) {
-            scanInlineBgmScript(script);
-          }
-        }
       } else {
         bgmObserver?.stop();
+        bgmObserver = null;
         bgmCache.clear();
       }
     }
@@ -1639,10 +1731,10 @@
       if (closest) cards.add(closest);
     }
 
-    function collectCardsFromAddedTree(node, cards) {
+    function collectCardsFromAddedTree(node, cards, budget) {
       visitAddedElements(node, (element) => {
         if (element.matches?.(PAGE_SELECTORS.feedCard)) cards.add(element);
-      });
+      }, budget);
     }
 
     function handleRootMutations(mutations) {
@@ -1655,13 +1747,31 @@
       }
 
       const affectedCards = new Set();
-      for (const mutation of mutations) {
+      const removedCards = new Set();
+      const addedElementBudget = createAddedElementBudget();
+      visitMutationRecords(mutations, (mutation) => {
         collectCardFromTarget(mutation.target, affectedCards);
         for (const node of mutation.addedNodes ?? []) {
-          collectCardsFromAddedTree(node, affectedCards);
+          collectCardsFromAddedTree(node, affectedCards, addedElementBudget);
         }
-      }
+        for (const node of mutation.removedNodes ?? []) {
+          if (ownedCards.has(node)) removedCards.add(node);
+          for (const ownedCard of ownedCards) {
+            if (node?.contains?.(ownedCard)) removedCards.add(ownedCard);
+          }
+        }
+      });
 
+      for (const card of removedCards) {
+        if (card.isConnected && currentRoot.contains?.(card)) continue;
+        if (currentEpoch?.card === card) retireCurrentEpoch();
+        if (currentActiveCard === card) {
+          currentActiveCard = null;
+          currentActiveId = '';
+        }
+        cleanupCard(card);
+        cardRecords.delete(card);
+      }
       if (hasEffectiveVideoRule()) {
         for (const card of affectedCards) processCard(card);
       }
@@ -2042,10 +2152,8 @@
       const previous = retireCurrentEpoch();
       const navigationConfirmed =
         previous?.state === 'navigating' && previous.id !== activeId;
-      let skipRecorded = false;
       if (navigationConfirmed) {
         recordConfirmedSkip();
-        skipRecorded = true;
         cleanupCard(previous.card);
         cardRecords.delete(previous.card);
       }
@@ -2065,7 +2173,6 @@
           cleanupCard(predictedCard);
           cardRecords.delete(predictedCard);
         }
-        if (!skipRecorded) recordConfirmedSkip();
         if (activeRecord?.state === 'block') {
           predictiveNavigation.targetId = activeId;
         } else {
@@ -2139,7 +2246,7 @@
       scheduleActiveCheck();
     }
 
-    function collectPageSignalsFromAddedTree(node, roots) {
+    function collectPageSignalsFromAddedTree(node, roots, budget) {
       visitAddedElements(node, (element) => {
         if (element.matches?.(PAGE_SELECTORS.feedRoot)) roots.add(element);
         if (
@@ -2148,28 +2255,38 @@
         ) {
           scanInlineBgmScript(element);
         }
-      });
+      }, budget);
     }
 
     function handleGlobalMutations(mutations) {
-      if (
-        currentRoot?.isConnected &&
-        mutations.every((mutation) => currentRoot.contains?.(mutation.target))
-      ) {
+      if (!isSupportedRecommendRoute(root.location)) {
+        if (currentRoot) detachRoot();
+        return;
+      }
+      let inspectedRecordCount = 0;
+      let onlyCurrentRootMutations = Boolean(currentRoot?.isConnected);
+      visitMutationRecords(mutations, (mutation) => {
+        inspectedRecordCount += 1;
+        if (!currentRoot?.contains?.(mutation.target)) {
+          onlyCurrentRootMutations = false;
+        }
+      });
+      if (onlyCurrentRootMutations && inspectedRecordCount > 0) {
         return;
       }
       const candidateRoots = new Set();
+      const addedElementBudget = createAddedElementBudget();
       let currentRootRemoved = Boolean(currentRoot && !currentRoot.isConnected);
-      for (const mutation of mutations) {
+      visitMutationRecords(mutations, (mutation) => {
         for (const node of mutation.addedNodes ?? []) {
-          collectPageSignalsFromAddedTree(node, candidateRoots);
+          collectPageSignalsFromAddedTree(node, candidateRoots, addedElementBudget);
         }
         for (const node of mutation.removedNodes ?? []) {
           if (node === currentRoot || node?.contains?.(currentRoot)) {
             currentRootRemoved = true;
           }
         }
-      }
+      });
       if (currentRootRemoved || candidateRoots.size > 0) {
         safeReconcilePage();
       }
@@ -2256,7 +2373,7 @@
       const danmakuRootChanged =
         hasEffectiveDanmakuRule() &&
         currentDanmakuRoot !== documentLike?.documentElement;
-      if (routeChanged && hasEffectiveBgmRule()) syncBgmObserver(true);
+      if (routeChanged && hasEffectiveBgmRule()) syncBgmObserver();
       if (
         routeChanged ||
         currentRoot?.isConnected === false ||
@@ -2348,7 +2465,14 @@
 
     function failOpenController(reason) {
       logger?.warn?.('[抖音 Web 增强] 视频过滤已停止并放行页面', reason);
+      started = false;
+      bgmObserver?.stop();
+      bgmObserver = null;
+      bgmCache.clear();
       stopLifecycle();
+      hideNotice();
+      preservedActivation = null;
+      settings = null;
     }
 
     function handleVisibilityChange() {
@@ -2379,7 +2503,7 @@
         videoSettingsSignature = videoSignature(settings);
         danmakuSettingsSignature = danmakuSignature(settings);
         fuseSettingsSignature = fuseSignature(settings);
-        syncBgmObserver(true);
+        syncBgmObserver();
         startLifecycle();
         return true;
       },
@@ -2403,7 +2527,9 @@
         videoSettingsSignature = nextVideoSignature;
         danmakuSettingsSignature = nextDanmakuSignature;
         fuseSettingsSignature = nextFuseSignature;
-        syncBgmObserver(true);
+        // 菜单更新发生在已加载页面上；历史 script 不做同步全扫，
+        // 新增 script 由全局 Observer 增量处理，后续 Feed 由单飞传输观察补齐。
+        syncBgmObserver();
 
         if (!hadEffectiveVideoRule && nextHasEffectiveVideoRule) {
           preservedActivation = captureActiveCard();
@@ -2449,6 +2575,7 @@
         if (!started) return false;
         started = false;
         bgmObserver?.stop();
+        bgmObserver = null;
         bgmCache.clear();
         stopLifecycle();
         hideNotice();
@@ -2565,7 +2692,39 @@
     const controller = overrides.createController
       ? overrides.createController()
       : createPageController(root, { logger });
-    controller.start(settings);
+    let runtimeActive = false;
+
+    function readRuntimeActive(fallback = runtimeActive) {
+      try {
+        const snapshot = controller.snapshot?.();
+        if (typeof snapshot?.started === 'boolean') return snapshot.started;
+        if (snapshot === null) return false;
+        return snapshot === undefined ? fallback : true;
+      } catch {
+        return false;
+      }
+    }
+
+    function startRuntime(nextSettings) {
+      try {
+        const startResult = controller.start(nextSettings);
+        runtimeActive =
+          startResult === false ? false : readRuntimeActive(true);
+        return runtimeActive;
+      } catch (error) {
+        runtimeActive = false;
+        reportError('[抖音 Web 增强] 恢复运行时失败', error);
+        return false;
+      }
+    }
+
+    try {
+      const startResult = controller.start(settings);
+      runtimeActive =
+        startResult === false ? false : readRuntimeActive(true);
+    } catch (error) {
+      reportError('[抖音 Web 增强] 启动运行时失败', error);
+    }
 
     const menuIds = new Map();
 
@@ -2586,11 +2745,19 @@
 
       const nextSettings = replaceCategorySettings(categoryId, nextCategory);
       settings = nextSettings;
+      runtimeActive = readRuntimeActive();
+      if (!runtimeActive) {
+        startRuntime(nextSettings);
+        refreshMenus();
+        return true;
+      }
       try {
         controller.updateSettings(nextSettings);
+        runtimeActive = readRuntimeActive(true);
       } catch (error) {
         // 存储已经提交成功；保留新快照，避免菜单与持久化状态分叉。
         reportError('[抖音 Web 增强] 更新运行时设置失败', error);
+        startRuntime(nextSettings);
       }
       refreshMenus();
       return true;
@@ -2614,6 +2781,12 @@
 
     function toggleCategory(category) {
       const current = settings[category.id];
+      runtimeActive = readRuntimeActive();
+      if (!runtimeActive) {
+        startRuntime(settings);
+        refreshMenus();
+        return runtimeActive;
+      }
       if (current.compiledKeywords.length === 0) {
         return editKeywords(category);
       }
@@ -2630,6 +2803,18 @@
     function getMenuLabels(category) {
       const current = settings[category.id];
       const keywordCount = current.compiledKeywords.length;
+      if (!runtimeActive) {
+        return {
+          editLabel:
+            keywordCount === 0
+              ? category.editName
+              : `${category.editName}（${keywordCount} 个）`,
+          statusLabel:
+            keywordCount === 0
+              ? `${category.statusName}：运行已停止（未配置）`
+              : `${category.statusName}：运行已停止（已保存 ${keywordCount} 个词）`,
+        };
+      }
       const statusLabel =
         keywordCount === 0
           ? `${category.statusName}：未配置`

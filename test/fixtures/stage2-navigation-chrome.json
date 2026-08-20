@@ -3,7 +3,7 @@
   "route": "https://www.douyin.com/?recommend=1",
   "probe": {
     "file": "tools/stage2-navigation-probe.user.js",
-    "version": "0.1.0",
+    "version": "0.1.0-test",
     "mode": "native-click",
     "ordinaryRouteInert": true,
     "optInParameterConsumed": true

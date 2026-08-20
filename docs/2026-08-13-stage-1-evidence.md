@@ -1,7 +1,7 @@
 # Stage 1 配置骨架验收报告
 
 > 日期：2026-08-13
-> 正式脚本版本：`0.1.0`
+> 正式脚本版本：`0.1.0-test`
 > 浏览器：Google Chrome + Tampermonkey，已登录抖音会话
 > 状态：Stage 1 已完成；自动页面验收与用户手工菜单验收均通过
 
@@ -30,7 +30,7 @@ Stage 1 只交付：
 
 ## 3. Chrome 自动页面验收
 
-在安装 `0.1.0` 后刷新 `https://www.douyin.com/?recommend=1`，确认：
+在安装 `0.1.0-test` 后刷新 `https://www.douyin.com/?recommend=1`，确认：
 
 - 唯一活动 Feed 和唯一标准活动卡片正常存在；
 - 页面没有脚本专属 DOM 属性、class 或 style；
