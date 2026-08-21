@@ -36,14 +36,21 @@ BGM 只通过 `awemeId/gid` 与视频卡片精确关联。脚本有界解析运�
 
 ## 安装与更新
 
-1. 安装 Chrome 和 Tampermonkey。
+1. 安装 Chrome 和 Tampermonkey（当前主要验证环境）。
 2. 在 Tampermonkey 中新建脚本。
 3. 用 [`douyin-web-enhancer.user.js`](./douyin-web-enhancer.user.js) 的完整内容替换编辑器内容并保存。
 4. 打开或刷新 `https://www.douyin.com/?recommend=1`。
 
 更新时重新执行第 3 步并刷新抖音页面。不要把 `tools/` 下的诊断探针作为日常产品脚本安装。
 
-当前 `0.0.1` 已在 Chrome + Tampermonkey 中完成三类过滤的功能回归，以及约 15.6 分钟推荐流和 3 次 SPA 往返的定向生命周期验证。其他浏览器和 Userscript 管理器尚未完成兼容性验收，不应视为已确认支持。
+当前 `0.0.2` 的浏览器兼容性如下：
+
+| 环境 | 视频/BGM 自动跳过 | 弹幕关键词过滤 |
+| --- | --- | --- |
+| Chrome + Tampermonkey | 已在首页推荐流完成三类过滤功能回归，以及约 15.6 分钟推荐流和 3 次 SPA 往返定向验证 | 已在推荐页和独立视频页验证 |
+| Edge + Tampermonkey | 当前推荐流未暴露脚本依赖的语义化上一条/下一条控件；命中后无法可靠自动跳过，脚本会提示并放行当前视频 | 不依赖视频切换控件，但 Edge 实页功能验收尚未完成 |
+
+Edge 中真实鼠标滚轮或键盘向下可以切换视频，但 Userscript 派发的合成 `WheelEvent` / `KeyboardEvent` 不能可靠触发同样行为，因此不作为自动跳过的替代方案。其他浏览器和 Userscript 管理器尚未完成兼容性验收。
 
 ## 支持范围与已知限制
 

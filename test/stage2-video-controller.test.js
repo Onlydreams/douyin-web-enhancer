@@ -185,8 +185,12 @@ function createControllerHarness(options = {}) {
     createElement: () => createElement({ isConnected: false }),
     querySelectorAll(selector) {
       if (selector === enhancer.PAGE_SELECTORS.feedRoot) return [rootElement];
-      if (selector === enhancer.PAGE_SELECTORS.nextControl) return [nextControl];
-      if (selector === enhancer.PAGE_SELECTORS.previousControl) return [previousControl];
+      if (selector === enhancer.PAGE_SELECTORS.nextControl) {
+        return options.controlsAvailable === false ? [] : [nextControl];
+      }
+      if (selector === enhancer.PAGE_SELECTORS.previousControl) {
+        return options.controlsAvailable === false ? [] : [previousControl];
+      }
       return [];
     },
     addEventListener(type, callback) {
@@ -865,6 +869,26 @@ test('navigation retries once then fails open', () => {
   assert.equal(harness.nextControl.clickCount, 2);
   assert.equal(harness.controller.snapshot().currentState, 'bypass');
   assert.equal(first.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'bypass');
+});
+
+test('missing semantic navigation controls fail open with a specific notice', () => {
+  const first = createCard('1111111111111111111', '命中内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({
+    cards: [first],
+    activeCard: first,
+    controlsAvailable: false,
+  });
+
+  harness.controller.start(settings('命中'));
+  harness.flushFrames();
+
+  assert.equal(harness.controller.snapshot().currentState, 'bypass');
+  assert.equal(first.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'bypass');
+  assert.equal(
+    harness.document.documentElement.appended.at(-1).textContent,
+    '当前页面没有可用的上一条/下一条控件，已放行当前视频。',
+  );
 });
 
 test('updating video rules does not ambush the current allowed epoch', () => {

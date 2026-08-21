@@ -3,7 +3,7 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.0.1
+// @version      0.0.2
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
@@ -1824,7 +1824,11 @@
       }
       epoch.state = 'bypass';
       setRecordState(epoch.record, 'bypass');
-      showNotice('抖音 Web 增强未能确认下一条，已放行当前视频。');
+      showNotice(
+        reason === 'next-control-unavailable'
+          ? '当前页面没有可用的上一条/下一条控件，已放行当前视频。'
+          : '抖音 Web 增强未能确认下一条，已放行当前视频。',
+      );
       logger?.warn?.('[抖音 Web 增强] 自动下一条已降级', reason);
       return true;
     }
