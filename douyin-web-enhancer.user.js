@@ -3,7 +3,7 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.0.2
+// @version      0.0.3
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
@@ -450,6 +450,9 @@
     });
   }
 
+  // SPA 和规则开关会重建观察器；旧正文结束前，新实例也必须共享背压。
+  const bgmBodyReadSlots = new WeakMap();
+
   function createBgmTransportObserver(pageRoot, options = {}) {
     const onMetadata = options.onMetadata ?? (() => {});
     const scheduleTask =
@@ -465,8 +468,11 @@
     let unavailable = false;
     let runSequence = 0;
     let activeRun = 0;
-    let activeBodyRead = 0;
-    let bodyReadSequence = 0;
+    let bodyReadSlot = bgmBodyReadSlots.get(pageRoot);
+    if (!bodyReadSlot) {
+      bodyReadSlot = { token: null };
+      bgmBodyReadSlots.set(pageRoot, bodyReadSlot);
+    }
     const pendingXhrs = new Map();
     const xhrCandidates = new WeakMap();
     const maxResponseChars = options.maxResponseChars ?? 2_000_000;
@@ -489,13 +495,14 @@
     }
 
     function beginBodyRead(run) {
-      if (!isCurrentRun(run) || activeBodyRead !== 0) return 0;
-      activeBodyRead = ++bodyReadSequence;
-      return activeBodyRead;
+      if (!isCurrentRun(run) || bodyReadSlot.token !== null) return null;
+      const token = {};
+      bodyReadSlot.token = token;
+      return token;
     }
 
     function finishBodyRead(token) {
-      if (activeBodyRead === token) activeBodyRead = 0;
+      if (bodyReadSlot.token === token) bodyReadSlot.token = null;
     }
 
     function emitPayload(payload, run) {
@@ -1106,6 +1113,7 @@
 
       const candidate = documentLike.createElement('style');
       candidate.id = VIDEO_STYLE_ID;
+      // 未遍历到的弹幕没有超时记录，必须默认可见；只门控已拥有的节点。
       candidate.textContent = `
 [${VIDEO_STATE_ATTRIBUTE}="pending"] video,
 [${VIDEO_STATE_ATTRIBUTE}="block"] video,
@@ -1119,7 +1127,6 @@
   visibility: hidden !important;
   opacity: 0 !important;
 }
-[${DANMAKU_ROOT_ATTRIBUTE}] [data-danmu-id]:not([${DANMAKU_STATE_ATTRIBUTE}]),
 [${DANMAKU_ROOT_ATTRIBUTE}] [${DANMAKU_STATE_ATTRIBUTE}="pending"],
 [${DANMAKU_ROOT_ATTRIBUTE}] [${DANMAKU_STATE_ATTRIBUTE}="block"] {
   visibility: hidden !important;
@@ -1657,7 +1664,12 @@
     }
 
     function processCard(card, force = false) {
-      if (!card?.matches?.(PAGE_SELECTORS.feedCard)) return null;
+      // 同一批中先变更后移除的卡片，清理后不能被迟到记录重新接管。
+      if (
+        !card?.isConnected ||
+        !currentRoot?.contains?.(card) ||
+        !card.matches?.(PAGE_SELECTORS.feedCard)
+      ) return null;
 
       const id = card.getAttribute('data-e2e-vid') ?? '';
       const previous = cardRecords.get(card);
@@ -1762,6 +1774,12 @@
         }
       });
 
+      if (mutations.length > MAX_MUTATION_RECORDS_PER_BATCH) {
+        // 记录截断不能丢失清理；只检查已拥有的卡片，不扫描页面或剩余变更。
+        for (const card of ownedCards) {
+          if (!card.isConnected || !currentRoot.contains?.(card)) removedCards.add(card);
+        }
+      }
       for (const card of removedCards) {
         if (card.isConnected && currentRoot.contains?.(card)) continue;
         if (currentEpoch?.card === card) retireCurrentEpoch();

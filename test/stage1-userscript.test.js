@@ -426,7 +426,7 @@ test('Stage 1 controller is inert and stores only settings snapshots', () => {
 });
 
 test('metadata grants only local storage and menu capabilities', () => {
-  assert.match(userscriptSource, /@version\s+0\.0\.2/u);
+  assert.match(userscriptSource, /@version\s+0\.0\.3/u);
   assert.match(userscriptSource, /@match\s+https:\/\/www\.douyin\.com\/\*/u);
   assert.match(userscriptSource, /@run-at\s+document-start/u);
   assert.match(userscriptSource, /@sandbox\s+raw/u);

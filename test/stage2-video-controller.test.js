@@ -269,14 +269,14 @@ function createControllerHarness(options = {}) {
     cancelAnimationFrame(id) {
       frames.delete(id);
     },
-    createBgmTransportObserver(_pageRoot, observerOptions) {
+    createBgmTransportObserver: options.createBgmTransportObserver ?? ((_pageRoot, observerOptions) => {
       emitBgmMetadata = observerOptions.onMetadata;
       return {
         start() { bgmObserving = true; return true; },
         stop() { bgmObserving = false; return true; },
         emit(items) { if (bgmObserving) emitBgmMetadata(items); },
       };
-    },
+    }),
   });
 
   function flushFrames() {
@@ -383,6 +383,96 @@ test('SPA route health checks do not rescan all inline BGM scripts', () => {
 
   assert.equal(textReads, 0);
 });
+
+for (const transition of ['route', 'settings', 'restart']) {
+  test(`BGM body reads stay single-flight across controller ${transition}`, async () => {
+    const card = createCard('1111111111111111111').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const tasks = [];
+    const harness = createControllerHarness({
+      cards: [card],
+      activeCard: card,
+      createBgmTransportObserver(pageRoot, options) {
+        return enhancer.createBgmTransportObserver(pageRoot, {
+          ...options,
+          scheduleTask: (callback) => tasks.push(callback),
+        });
+      },
+    });
+    let cloneCount = 0;
+    let resolveText;
+    const pendingText = new Promise((resolve) => { resolveText = resolve; });
+    harness.root.location.origin = 'https://www.douyin.com';
+    const originalFetch = async () => ({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      clone() {
+        cloneCount += 1;
+        return { text: () => pendingText };
+      },
+    });
+    harness.root.fetch = originalFetch;
+    const initialSettings = combinedSettings('', '音乐');
+    harness.controller.start(initialSettings);
+    await harness.root.fetch('/aweme/v1/web/tab/feed/');
+
+    if (transition === 'route') {
+      harness.setHref('https://www.douyin.com/jingxuan');
+      harness.runHealthChecks();
+      harness.setHref('https://www.douyin.com/?recommend=1');
+      harness.runHealthChecks();
+    } else if (transition === 'settings') {
+      harness.controller.updateSettings(combinedSettings('', ''));
+      harness.controller.updateSettings(initialSettings);
+    } else {
+      harness.controller.stop();
+      harness.controller.start(initialSettings);
+    }
+    await harness.root.fetch('/aweme/v1/web/tab/feed/');
+    assert.equal(cloneCount, 1);
+
+    resolveText('{}');
+    await Promise.resolve();
+    while (tasks.length) tasks.shift()();
+    await harness.root.fetch('/aweme/v1/web/tab/feed/');
+    assert.equal(cloneCount, 2, 'the old task must release the shared slot');
+    await Promise.resolve();
+    while (tasks.length) tasks.shift()();
+    harness.controller.stop();
+    assert.equal(harness.root.fetch, originalFetch);
+  });
+}
+
+for (const removeActive of [false, true]) {
+  test(`truncated feed batches release ${removeActive ? 'active' : 'inactive'} cards outside the root`, () => {
+    const active = createCard('1111111111111111111').card;
+    const inactive = createCard('2222222222222222222').card;
+    active.setAttribute('data-e2e', 'feed-active-video');
+    const harness = createControllerHarness({ cards: [active, inactive], activeCard: active });
+    harness.controller.start(settings('不命中'));
+    harness.flushFrames();
+    const removed = removeActive ? active : inactive;
+    const retained = removeActive ? inactive : active;
+    // Connected nodes moved outside the feed also need ownership cleanup.
+    removed.parentElement = createElement();
+    harness.rootElement.setQuery(enhancer.PAGE_SELECTORS.feedCard, [retained]);
+    if (removeActive) harness.rootElement.setQuery(enhancer.PAGE_SELECTORS.activeCard, []);
+    const mutations = Array.from({ length: 64 }, () => ({
+      type: 'childList', target: retained, addedNodes: [], removedNodes: [],
+    }));
+    mutations[0].target = removed;
+    mutations.push({
+      type: 'childList', target: harness.rootElement, addedNodes: [], removedNodes: [removed],
+    });
+    for (const observer of [...harness.observers]) observer.callback(mutations);
+    harness.runHealthChecks();
+    assert.equal(removed.hasAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), false);
+    assert.equal(harness.controller.snapshot().ownedCardCount, 1);
+    assert.equal(retained.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'allow');
+    if (removeActive) assert.equal(harness.controller.snapshot().currentState, null);
+    harness.controller.stop();
+  });
+}
 
 test('evicted feed cards immediately release script ownership', () => {
   const first = createCard('1111111111111111111', '允许内容').card;

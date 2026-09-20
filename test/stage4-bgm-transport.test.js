@@ -237,6 +237,61 @@ test('an XHR task from an earlier run cannot enter a restarted observer', () => 
   assert.deepEqual(batches, []);
 });
 
+test('a queued XHR task blocks fetch reads in a replacement observer until it finishes', async () => {
+  const tasks = [];
+  const batches = [];
+  class FakeXHR {
+    constructor() { this.listeners = new Map(); this.status = 200; this.responseType = ''; }
+    open() {}
+    send() {}
+    addEventListener(type, callback) { this.listeners.set(type, callback); }
+    removeEventListener(type, callback) {
+      if (this.listeners.get(type) === callback) this.listeners.delete(type);
+    }
+    emit(type) { this.listeners.get(type)?.call(this); }
+    getResponseHeader() { return 'application/json'; }
+  }
+  const payload = { aweme_id: '1111111111111111111', music: { title: '音乐' } };
+  let clones = 0;
+  const pageRoot = {
+    location: { origin: 'https://www.douyin.com' },
+    XMLHttpRequest: FakeXHR,
+    fetch: async () => ({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      clone() {
+        clones += 1;
+        return { text: async () => JSON.stringify(payload) };
+      },
+    }),
+  };
+  const options = {
+    onMetadata: (items) => batches.push(items),
+    scheduleTask: (callback) => tasks.push(callback),
+  };
+  const oldObserver = enhancer.createBgmTransportObserver(pageRoot, options);
+  oldObserver.start();
+  const xhr = new FakeXHR();
+  xhr.open('GET', '/aweme/v1/web/tab/feed/');
+  xhr.send();
+  xhr.responseText = JSON.stringify(payload);
+  xhr.emit('loadend');
+  oldObserver.stop();
+  const newObserver = enhancer.createBgmTransportObserver(pageRoot, options);
+  newObserver.start();
+  await pageRoot.fetch('/aweme/v1/web/tab/feed/');
+  assert.equal(clones, 0);
+  tasks.shift()();
+  assert.deepEqual(batches, [], 'the retired XHR must not publish metadata');
+  await pageRoot.fetch('/aweme/v1/web/tab/feed/');
+  await Promise.resolve();
+  assert.equal(clones, 1);
+  tasks.shift()();
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0][0].awemeId, payload.aweme_id);
+  newObserver.stop();
+});
+
 test('XHR wrapper preserves calls and parses after loadend', async () => {
   const calls = [];
   class FakeXHR {

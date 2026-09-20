@@ -409,7 +409,7 @@ test('danmaku filtering works on a standalone video route without a recommend li
   assert.equal(harness.controller.snapshot().rootConnected, false);
 });
 
-test('new and text-late danmaku nodes are decided before becoming visible', () => {
+test('new and text-late danmaku nodes receive pending and block states', () => {
   const root = createDanmakuRoot([]);
   const card = createCard('1111111111111111111', root);
   const harness = createHarness({ cards: [card], activeCard: card });
@@ -443,6 +443,37 @@ test('video feed generation changes cannot stale the page-level danmaku observer
   harness.emit(root, [{ type: 'childList', target: root, addedNodes: [added] }]);
 
   assert.equal(added.getAttribute(DANMAKU_STATE_ATTRIBUTE), 'block');
+});
+
+test('danmaku beyond the added-element budget remain unowned and are not hidden by CSS', () => {
+  const card = createCard('1111111111111111111');
+  const harness = createHarness({ cards: [card], activeCard: card });
+  const createdElements = [];
+  harness.document.createElement = () => {
+    const element = createElement({ isConnected: false });
+    createdElements.push(element);
+    return element;
+  };
+  harness.controller.start(settings('屏蔽'));
+  const nodes = Array.from({ length: 65 }, (_, index) =>
+    createDanmakuNode(String(2222222222222222200n + BigInt(index)), '正常内容'),
+  );
+  const root = harness.document.documentElement;
+  root.setQuery(enhancer.PAGE_SELECTORS.danmakuNode, nodes);
+  harness.emit(root, [{ type: 'childList', target: root, addedNodes: nodes, removedNodes: [] }]);
+  harness.fireTimersByDelay(100);
+  harness.runHealthChecks();
+  assert.equal(nodes.filter((node) => node.hasAttribute(DANMAKU_STATE_ATTRIBUTE)).length, 64);
+  assert.equal(nodes[64].hasAttribute(DANMAKU_STATE_ATTRIBUTE), false);
+  const style = createdElements.find((node) => node.id === 'dwe-video-filter-style');
+  assert.doesNotMatch(style.textContent, /\[data-danmu-id\]:not\(/);
+  assert.match(style.textContent, /\[data-dwe-danmaku-state="pending"\]/);
+  assert.match(style.textContent, /\[data-dwe-danmaku-state="block"\]/);
+  nodes[64].textContent = '后来需要屏蔽';
+  harness.emit(root, [{ type: 'characterData', target: nodes[64], addedNodes: [] }]);
+  assert.equal(nodes[64].getAttribute(DANMAKU_STATE_ATTRIBUTE), 'block');
+  harness.controller.stop();
+  assert.equal(nodes[64].hasAttribute(DANMAKU_STATE_ATTRIBUTE), false);
 });
 
 test('health checks do not rescan danmaku missed by mutation delivery', () => {
