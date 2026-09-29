@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "agent-observed Chrome with user-installed Tampermonkey probe",
+  "timezone": "UTC",
+  "samples": [
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:15:59.125Z",
+      "mode": "baseline",
+      "outcome": "baseline-stable",
+      "targetKind": "none",
+      "stableWaitMs": 8000,
+      "eventCount": 0,
+      "identityChanges": 0,
+      "dispatchElapsedMs": 9839,
+      "firstChangeMs": null,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 14898,
+      "beforePlayback": {
+        "currentTime": 17.632562,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 670901.2245
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:16:45.140Z",
+      "mode": "focus-pair",
+      "outcome": "not-confirmed",
+      "targetKind": "body",
+      "stableWaitMs": 1000,
+      "eventCount": 2,
+      "identityChanges": 0,
+      "dispatchElapsedMs": 2135,
+      "firstChangeMs": null,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 7234,
+      "beforePlayback": {
+        "currentTime": 3.010647,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 23188.679
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:17:21.080Z",
+      "mode": "focus-pair",
+      "outcome": "one-change-observed",
+      "targetKind": "body",
+      "stableWaitMs": 8000,
+      "eventCount": 2,
+      "identityChanges": 1,
+      "dispatchElapsedMs": 8850,
+      "firstChangeMs": 114,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 13942,
+      "beforePlayback": {
+        "currentTime": 16.623275,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 92091.367
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:17:54.537Z",
+      "mode": "focus-pair",
+      "outcome": "near-video-end",
+      "targetKind": "none",
+      "stableWaitMs": 1000,
+      "eventCount": 0,
+      "identityChanges": 0,
+      "dispatchElapsedMs": null,
+      "firstChangeMs": null,
+      "documentFocusedAtDispatch": null,
+      "elapsedMs": 1789,
+      "beforePlayback": {
+        "currentTime": 0.598528,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 7386.235
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:18:33.422Z",
+      "mode": "focus-pair",
+      "outcome": "one-change-observed",
+      "targetKind": "body",
+      "stableWaitMs": 8000,
+      "eventCount": 2,
+      "identityChanges": 1,
+      "dispatchElapsedMs": 8900,
+      "firstChangeMs": 115,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 13933,
+      "beforePlayback": {
+        "currentTime": 16.547046,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 141994.41349999997
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:19:01.019Z",
+      "mode": "focus-pair",
+      "outcome": "not-confirmed",
+      "targetKind": "body",
+      "stableWaitMs": 1000,
+      "eventCount": 2,
+      "identityChanges": 0,
+      "dispatchElapsedMs": 1809,
+      "firstChangeMs": null,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 6856,
+      "beforePlayback": {
+        "currentTime": 2.547089,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 174012.952
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:19:36.584Z",
+      "mode": "focus-pair",
+      "outcome": "one-change-observed",
+      "targetKind": "body",
+      "stableWaitMs": 8000,
+      "eventCount": 2,
+      "identityChanges": 1,
+      "dispatchElapsedMs": 8817,
+      "firstChangeMs": 116,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 13825,
+      "beforePlayback": {
+        "currentTime": 16.558598,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 96093.6715
+      }
+    },
+    {
+      "probe": "keyboard-navigation",
+      "probeVersion": "0.2.0-test",
+      "beforeMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "afterMedia": {
+        "activeVideoCount": 1,
+        "activePlaying": 1,
+        "otherPlaying": 0
+      },
+      "timestamp": "2026-09-21T10:20:22.769Z",
+      "mode": "focus-pair",
+      "outcome": "not-confirmed",
+      "targetKind": "body",
+      "stableWaitMs": 1000,
+      "eventCount": 2,
+      "identityChanges": 0,
+      "dispatchElapsedMs": 1811,
+      "firstChangeMs": null,
+      "documentFocusedAtDispatch": true,
+      "elapsedMs": 6851,
+      "beforePlayback": {
+        "currentTime": 2.384455,
+        "playbackRate": 2,
+        "readyState": 4,
+        "remainingWallMs": 314042.2735
+      }
+    }
+  ],
+  "limits": [
+    "Independent recommendation reloads, not the same video paired at two times.",
+    "One near-video-end sample excluded without dispatching; its beforePlayback is the last stable candidate, not dispatch state.",
+    "Not a product-level filtering, audio, frame or Edge acceptance test.",
+    "Successful ID-change latency is sampled at approximately 100ms; handler registration or animation-lock cause is not yet proven."
+  ]
+}

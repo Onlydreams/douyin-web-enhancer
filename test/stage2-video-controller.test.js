@@ -1004,6 +1004,56 @@ test('updating video rules does not ambush the current allowed epoch', () => {
   assert.equal(harness.nextControl.clickCount, 1);
 });
 
+test('foreground storage refresh reclassifies the next card without skipping the current card', () => {
+  const first = createCard('1111111111111111111', '新词').card;
+  const second = createCard('2222222222222222222', '新词').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [first, second], activeCard: first });
+  const values = new Map([[enhancer.STORAGE_KEYS.video.keywords, '旧词']]);
+  const root = new EventTarget();
+  root.document = new EventTarget();
+  root.document.visibilityState = 'visible';
+  const app = enhancer.bootstrap({ root,
+    createController: () => harness.controller,
+    getValue: (key, fallback) => values.has(key) ? values.get(key) : fallback,
+    setValue: (key, value) => values.set(key, value),
+    registerMenu: () => 1,
+  });
+  harness.flushFrames();
+  values.set(enhancer.STORAGE_KEYS.video.keywords, '新词');
+  root.dispatchEvent(new Event('focus'));
+  assert.equal(first.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'allow');
+  assert.equal(second.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'block');
+  assert.equal(harness.nextControl.clickCount, 0);
+  harness.switchActive(second);
+  assert.equal(harness.nextControl.clickCount, 1);
+  app.stop();
+});
+
+test('settings refresh after background teardown preserves the current card in either foreground event order', () => {
+  for (const reconcileFirst of [false, true]) {
+    const first = createCard('1111111111111111111', '新词').card;
+    const second = createCard('2222222222222222222', '新词').card;
+    first.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [first, second], activeCard: first });
+    h.controller.start(settings('旧词')); h.flushFrames();
+    h.document.visibilityState = 'hidden'; h.dispatch('visibilitychange');
+    assert.equal(h.controller.snapshot().currentState, null);
+    h.document.visibilityState = 'visible';
+    if (reconcileFirst) { h.dispatch('visibilitychange'); h.flushFrames(); }
+    h.controller.updateSettings(settings('新词'));
+    if (!reconcileFirst) h.dispatch('visibilitychange');
+    h.flushFrames();
+    assert.equal(h.nextControl.clickCount, 0, String(reconcileFirst));
+    assert.ok(['allow', 'bypass'].includes(h.controller.snapshot().currentState));
+    assert.equal(second.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'block');
+    h.switchActive(second);
+    assert.equal(h.nextControl.clickCount, 1);
+    h.switchActive(first);
+    assert.equal(h.nextControl.clickCount, 2);
+  }
+});
+
 test('enabling the first video rule preserves the current card but reevaluates it after return', () => {
   const first = createCard('1111111111111111111', '后来命中').card;
   const second = createCard('2222222222222222222', '允许内容').card;
@@ -1191,4 +1241,432 @@ test('reused card nodes cannot inherit a prior video decision', () => {
 
   assert.equal(harness.nextControl.clickCount, 1);
   assert.equal(harness.controller.snapshot().currentState, 'navigating');
+});
+
+function attachNativeNavigation(harness, card, onEmit = () => {}) {
+  const swiper = {
+    el: harness.rootElement, activeIndex: 1,
+    data: [{ awemeId: '8888888888888888888' },
+      { awemeId: card.getAttribute('data-e2e-vid') }, { awemeId: '9999999999999999999' }],
+    touchData: { animating: false }, isDisabled: () => false,
+    slideNext() {}, emit: onEmit,
+  };
+  const top = { stateNode: {} };
+  top.stateNode.current = top;
+  card.__reactFiber$test = { stateNode: card, return: top,
+    memoizedProps: { isActive: true, item: swiper.data[1], swiper } };
+  return swiper;
+}
+
+test('native navigation waits at the observed two-item queue tail then dispatches once after append', () => {
+  const card = createCard('1111111111111111111', '命中内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+  const calls = [];
+  const swiper = attachNativeNavigation(h, card, event => calls.push(event));
+  swiper.data.length = 2;
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.deepEqual(calls, []);
+  assert.equal(h.controller.snapshot().currentState, 'block');
+  h.advance(50); h.fireTimersByDelay(50);
+  assert.deepEqual(calls, []);
+  swiper.data.push(...Array.from({ length: 6 }, () => ({ awemeId: '9999999999999999999' })));
+  h.advance(50); h.fireTimersByDelay(50);
+  assert.deepEqual(calls, ['changeNext']);
+  h.fireTimersByDelay(50);
+  assert.equal(calls.length, 1);
+});
+
+test('queue wait expires or cancels without dispatch and late data cannot revive it', () => {
+  for (const reason of ['timeout', 'stop', 'hidden', 'user-input', 'route', 'root', 'identity']) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+    swiper.data.length = 2;
+    h.controller.start(settings('命中')); h.flushFrames();
+    assert.equal(calls, 0, reason);
+    if (reason === 'timeout') h.advance(2500);
+    if (reason === 'stop') h.controller.stop();
+    if (reason === 'hidden') { h.document.visibilityState = 'hidden'; h.dispatch('visibilitychange', {}); }
+    if (reason === 'user-input') h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp' });
+    if (reason === 'route') h.setHref('https://www.douyin.com/follow');
+    if (reason === 'identity') swiper.data[1] = { awemeId: '9999999999999999999' };
+    if (reason === 'root') {
+      const query = h.document.querySelectorAll.bind(h.document);
+      h.document.querySelectorAll = selector => selector === enhancer.PAGE_SELECTORS.feedRoot ? [{}] : query(selector);
+    }
+    swiper.data.push({ awemeId: '9999999999999999999' });
+    h.fireTimersByDelay(50); h.advance(5000); h.fireTimersByDelay(50);
+    assert.equal(calls, 0, reason);
+    assert.notEqual(h.controller.snapshot().currentState, 'navigating', reason);
+  }
+});
+
+test('queue readiness is checked after isDisabled and requires an actual destination row', () => {
+  const card = createCard('1111111111111111111', '命中内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+  let calls = 0;
+  const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+  swiper.isDisabled = () => { swiper.data[2] = false; return false; };
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(calls, 0);
+  swiper.isDisabled = () => false;
+  swiper.data[2] = { live: true };
+  h.fireTimersByDelay(50);
+  assert.equal(calls, 1);
+});
+
+test('queue wait retains upward direction and does not use a ready downward row', () => {
+  const blocked = createCard('1111111111111111111', '命中内容').card;
+  const after = createCard('2222222222222222222', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [blocked, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  const swiper = attachNativeNavigation(h, blocked, event => calls.push(event));
+  swiper.data[0] = false;
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(blocked); h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, []);
+  swiper.data[0] = { awemeId: '8888888888888888888' };
+  h.fireTimersByDelay(50);
+  assert.deepEqual(calls, ['changePrev']);
+});
+
+test('missing controls use verified native navigation once and confirm the next card', () => {
+  const first = createCard('1111111111111111111', '命中内容').card;
+  const second = createCard('2222222222222222222', '允许内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [first, second], activeCard: first, controlsAvailable: false });
+  const calls = [];
+  const swiper = attachNativeNavigation(h, first, function (...args) { calls.push([this, ...args]); });
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.deepEqual(calls, [[swiper, 'changeNext', { from: 'keyboard' }]]);
+  h.switchActive(second);
+  assert.equal(h.controller.snapshot().currentState, 'allow');
+  h.fireTimersByDelay(2500);
+  assert.equal(calls.length, 1);
+});
+
+test('unconfirmed native navigation never retries even when destination has no standard card', () => {
+  for (const missingCard of [false, true]) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    attachNativeNavigation(h, card, () => { calls += 1; });
+    h.controller.start(settings('命中')); h.flushFrames();
+    if (missingCard) h.rootElement.setQuery(enhancer.PAGE_SELECTORS.activeCard, []);
+    h.fireTimersByDelay(2500); h.fireTimersByDelay(2500);
+    assert.equal(calls, 1);
+    assert.equal(h.controller.snapshot().currentState, 'bypass');
+  }
+});
+
+test('native navigation waits only for animation and cancels pending work on stop', () => {
+  for (const stop of [false, true]) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+    swiper.touchData.animating = true;
+    h.controller.start(settings('命中')); h.flushFrames();
+    assert.equal(calls, 0);
+    if (stop) h.controller.stop();
+    swiper.touchData.animating = false;
+    h.fireTimersByDelay(50);
+    assert.equal(calls, stop ? 0 : 1);
+  }
+});
+
+test('native animation lasting one second dispatches when ready but a stuck animation stays bounded', () => {
+  for (const stuck of [false, true]) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+    swiper.touchData.animating = true;
+    h.controller.start(settings('命中')); h.flushFrames();
+    h.advance(850); h.fireTimersByDelay(50);
+    assert.equal(h.controller.snapshot().currentState, 'block');
+    assert.equal(calls, 0);
+    if (stuck) {
+      h.advance(1650); h.fireTimersByDelay(50);
+      assert.equal(h.controller.snapshot().currentState, 'bypass');
+      swiper.touchData.animating = false;
+      h.fireTimersByDelay(50);
+      assert.equal(calls, 0);
+    } else {
+      h.advance(150);
+      swiper.touchData.animating = false;
+      h.fireTimersByDelay(50);
+      assert.equal(calls, 1);
+      assert.equal(h.controller.snapshot().currentState, 'navigating');
+    }
+  }
+});
+
+test('native preflight rejects stale identity, disabled navigation, editable focus and animation timeout', () => {
+  for (const reason of ['identity', 'disabled', 'focus', 'timeout', 'hidden', 'user-input', 'throw']) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+    if (reason === 'identity') swiper.data = [{ awemeId: '9999999999999999999' }];
+    if (reason === 'disabled') swiper.isDisabled = () => true;
+    if (reason === 'throw') swiper.isDisabled = () => { throw Error('unavailable'); };
+    if (reason === 'focus') h.document.activeElement = { closest: () => ({}) };
+    if (['timeout', 'hidden', 'user-input'].includes(reason)) swiper.touchData.animating = true;
+    h.controller.start(settings('命中')); h.flushFrames();
+    if (reason === 'hidden') { h.document.visibilityState = 'hidden'; h.dispatch('visibilitychange', {}); }
+    if (reason === 'user-input') h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown' });
+    h.advance(2500); h.fireTimersByDelay(50);
+    assert.equal(calls, 0, reason);
+    assert.notEqual(h.controller.snapshot().currentState, 'navigating', reason);
+  }
+});
+
+test('native consecutive keyword hits reacquire each card and use the existing skip fuse', () => {
+  const cards = Array.from({ length: 14 }, (_, i) => createCard(String(1111111111111111111n + BigInt(i)), '命中内容').card);
+  cards[0].setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards, activeCard: cards[0], controlsAvailable: false });
+  const calls = [];
+  cards.forEach((card, i) => attachNativeNavigation(h, card, () => calls.push(i)));
+  h.controller.start(settings('命中')); h.flushFrames();
+  for (let i = 1; i <= 12; i += 1) h.switchActive(cards[i]);
+  assert.deepEqual(calls, Array.from({ length: 12 }, (_, i) => i));
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('BGM metadata dispatches the native path when controls are absent', () => {
+  const first = createCard('1111111111111111111', '允许内容').card;
+  const second = createCard('2222222222222222222', '允许内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const harness = createControllerHarness({ cards: [first, second], activeCard: first, controlsAvailable: false });
+  let calls = 0;
+  attachNativeNavigation(harness, first, () => { calls += 1; });
+  harness.controller.start(combinedSettings('', '目标音乐'));
+  harness.flushFrames();
+  assert.equal(harness.controller.snapshot().currentState, 'pending');
+
+  const script = createElement({
+    textContent: 'createQuickPlayer({awemeInfo:{awemeId:"1111111111111111111",music:{title:"目标音乐"}}})',
+  });
+  script.tagName = 'SCRIPT';
+  for (const observer of [...harness.observers]) {
+    observer.callback([{
+      type: 'childList',
+      target: harness.document.documentElement,
+      addedNodes: [script],
+      removedNodes: [],
+    }]);
+  }
+  harness.flushFrames();
+
+  assert.equal(harness.nextControl.clickCount, 0);
+  assert.equal(calls, 1);
+  assert.equal(harness.controller.snapshot().currentState, 'navigating');
+});
+
+
+test('native pending animation rechecks route and root before dispatch', () => {
+  for (const changed of ['route', 'root']) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    const swiper = attachNativeNavigation(h, card, () => { calls += 1; });
+    swiper.touchData.animating = true;
+    h.controller.start(settings('命中')); h.flushFrames();
+    swiper.touchData.animating = false;
+    if (changed === 'route') h.setHref('https://www.douyin.com/follow');
+    else {
+      const query = h.document.querySelectorAll.bind(h.document);
+      h.document.querySelectorAll = selector => selector === enhancer.PAGE_SELECTORS.feedRoot ? [{}] : query(selector);
+    }
+    h.fireTimersByDelay(50);
+    assert.equal(calls, 0);
+    assert.equal(h.controller.snapshot().currentState, 'bypass');
+  }
+});
+
+test('native navigation keeps the trusted upward entry direction on a blocked card', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blocked, (event) => { calls.push(event); });
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(blocked);
+  h.rootElement.dispatch('transitionend', { propertyName: 'transform' });
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changePrev']);
+  h.switchActive(before);
+  assert.equal(h.controller.snapshot().currentState, 'allow');
+});
+
+test('native consecutive blocked cards inherit the confirmed upward navigation direction', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blockedA = createCard('2222222222222222222', '命中甲').card;
+  const blockedB = createCard('3333333333333333333', '命中乙').card;
+  const after = createCard('4444444444444444444', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blockedA, blockedB, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blockedA, event => calls.push(event));
+  attachNativeNavigation(h, blockedB, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(blockedB);
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changePrev']);
+  h.switchActive(blockedA);
+  assert.deepEqual(calls, ['changePrev', 'changePrev']);
+  h.switchActive(before);
+  assert.equal(h.controller.snapshot().currentState, 'allow');
+});
+
+test('native navigation fails open when the observed upward target does not activate', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  const other = createCard('4444444444444444444', '命中内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after, other], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, other, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(other);
+  assert.deepEqual(calls, []);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('native upward direction survives animation readiness polling', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  const swiper = attachNativeNavigation(h, blocked, event => calls.push(event));
+  swiper.touchData.animating = true;
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('wheel', { isTrusted: true, deltaY: -100, deltaX: 0, target: h.rootElement });
+  h.switchActive(blocked);
+  assert.deepEqual(calls, []);
+  h.advance(500); h.fireTimersByDelay(500);
+  swiper.touchData.animating = false;
+  h.fireTimersByDelay(50);
+  assert.deepEqual(calls, ['changePrev']);
+});
+
+test('BGM match after upward activation retains the observed direction', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const middle = createCard('2222222222222222222', '允许内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, middle, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, middle, event => calls.push(event));
+  h.controller.start(combinedSettings('', '目标音乐')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(middle);
+  const script = createElement({textContent:'createQuickPlayer({awemeInfo:{awemeId:"2222222222222222222",music:{title:"目标音乐"}}})'});
+  script.tagName = 'SCRIPT';
+  for (const observer of [...h.observers]) observer.callback([{
+    type: 'childList', target: h.document.documentElement, addedNodes: [script], removedNodes: [],
+  }]);
+  h.flushFrames();
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changePrev']);
+});
+
+test('native navigation waits beyond the site 400ms action throttle after manual entry', () => {
+  const first = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [first, blocked], activeCard: first, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blocked, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+  h.switchActive(blocked);
+  assert.deepEqual(calls, []);
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changeNext']);
+});
+
+test('visible live destination retires the video epoch and upward return creates a new directional activation', () => {
+  const card = createCard('1111111111111111111', '命中内容').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, card, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+  const live = createElement({ parentElement: h.rootElement,
+    rect: { top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600 } });
+  h.rootElement.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600 });
+  h.rootElement.setQuery('[data-e2e="feed-live"]', [live]);
+  card.setAttribute('data-e2e', 'feed-video');
+  card.getBoundingClientRect = () => ({ top: -612, bottom: -12, height: 600 });
+  h.rootElement.setQuery(enhancer.PAGE_SELECTORS.activeCard, []);
+  h.runHealthChecks(); h.fireTimersByDelay(2500);
+  assert.equal(h.controller.snapshot().currentState, null);
+  assert.deepEqual(calls, ['changeNext']);
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.rootElement.setQuery('[data-e2e="feed-live"]', []);
+  h.switchActive(card); h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changeNext', 'changePrev']);
+});
+
+test('live departure requires a unique visible card in the current root and no standard active marker', () => {
+  for (const reason of ['offscreen', 'duplicate', 'standard-active', 'root', 'route', 'hidden-style']) {
+    const card = createCard('1111111111111111111', '命中内容').card;
+    card.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+    let calls = 0;
+    attachNativeNavigation(h, card, () => { calls += 1; });
+    h.controller.start(settings('命中')); h.flushFrames();
+    const rect = { top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600 };
+    h.rootElement.getBoundingClientRect = () => rect;
+    const live = createElement({ parentElement: h.rootElement, rect: reason === 'offscreen' ?
+      { ...rect, top: 612, bottom: 1212 } : rect });
+    h.rootElement.setQuery('[data-e2e="feed-live"]', reason === 'duplicate' ? [live, live] : [live]);
+    if (reason !== 'standard-active') h.rootElement.setQuery(enhancer.PAGE_SELECTORS.activeCard, []);
+    if (reason === 'route') h.setHref('https://www.douyin.com/follow');
+    if (reason === 'root') {
+      const query = h.document.querySelectorAll.bind(h.document);
+      h.document.querySelectorAll = selector => selector === enhancer.PAGE_SELECTORS.feedRoot ? [{}] : query(selector);
+    }
+    if (reason === 'hidden-style') h.root.getComputedStyle = () => ({ display: 'none' });
+    h.fireTimersByDelay(2500);
+    assert.equal(h.controller.snapshot().currentState, 'bypass', reason);
+    assert.equal(calls, 1, reason);
+  }
+});
+
+test('trusted input during throttle wait cancels the pending native action', () => {
+  const first = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  first.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [first, blocked], activeCard: first, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blocked, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+  h.switchActive(blocked);
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, []);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
 });

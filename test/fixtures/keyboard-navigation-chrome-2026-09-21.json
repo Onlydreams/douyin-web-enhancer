@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "agent-observed Chrome with user-installed Tampermonkey probe",
+  "probeVersion": "0.1.0-test",
+  "timezone": "UTC",
+  "source": "DWE Keyboard Probe console reports; browser input comparisons",
+  "validSampleMediaBeforeAndAfter": {
+    "activeVideoCount": 1,
+    "activePlaying": 1,
+    "otherPlaying": 0
+  },
+  "samples": [
+    { "timestamp": "2026-09-21T09:43:39.437Z", "mode": "baseline", "outcome": "baseline-stable", "targetKind": "none", "eventCount": 0, "identityChanges": 0, "elapsedMs": 7505 },
+    { "timestamp": "2026-09-21T09:44:03.559Z", "mode": "body-down", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 1, "identityChanges": 0, "elapsedMs": 7109 },
+    { "timestamp": "2026-09-21T09:47:15.223Z", "mode": "focus-pair", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 2, "identityChanges": 0, "elapsedMs": 7021 },
+    { "timestamp": "2026-09-21T09:47:45.852Z", "mode": "body-down", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 1, "identityChanges": 0, "elapsedMs": 7013 },
+    { "timestamp": "2026-09-21T09:48:12.634Z", "mode": "focus-pair", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 2, "identityChanges": 0, "elapsedMs": 6881 },
+    { "timestamp": "2026-09-21T09:48:35.166Z", "mode": "body-down", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 1, "identityChanges": 0, "elapsedMs": 6961 },
+    { "timestamp": "2026-09-21T09:49:30.973Z", "mode": "focus-pair", "outcome": "user-input", "targetKind": "body", "eventCount": 2, "identityChanges": 1, "elapsedMs": 6835, "excluded": true, "afterMedia": null },
+    { "timestamp": "2026-09-21T09:49:53.782Z", "mode": "focus-pair", "outcome": "one-change-observed", "targetKind": "body", "eventCount": 2, "identityChanges": 1, "elapsedMs": 7081 },
+    { "timestamp": "2026-09-21T09:50:40.703Z", "mode": "focus-pair", "outcome": "one-change-observed", "targetKind": "body", "eventCount": 2, "identityChanges": 1, "elapsedMs": 6853 },
+    { "timestamp": "2026-09-21T09:51:24.797Z", "mode": "body-down", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 1, "identityChanges": 0, "elapsedMs": 7112 },
+    { "timestamp": "2026-09-21T09:51:34.515Z", "mode": "baseline", "outcome": "baseline-stable", "targetKind": "none", "eventCount": 0, "identityChanges": 0, "elapsedMs": 7002 },
+    { "timestamp": "2026-09-21T09:52:09.721Z", "mode": "focus-pair", "outcome": "not-confirmed", "targetKind": "body", "eventCount": 2, "identityChanges": 0, "elapsedMs": 6894 }
+  ],
+  "browserInputControls": [
+    { "afterSample": 3, "key": "Down", "identityChanged": true, "activeCount": 1 },
+    { "afterSample": 12, "key": "Down", "identityChanged": true, "activeCount": 1, "playingVideos": 1 }
+  ],
+  "limits": [
+    "Version 0.1.0-test checked remaining media seconds without playbackRate; natural autoplay cannot be excluded for identity-change samples.",
+    "Not randomized; different recommendation reloads can contain different videos.",
+    "All focus-pair samples targeted body; other focused elements untested.",
+    "Polling at 100ms does not capture every transient identity or media state.",
+    "No audio recording, frame measurement, or integrated filtering acceptance.",
+    "No Edge validation."
+  ]
+}

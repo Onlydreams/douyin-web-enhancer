@@ -80,6 +80,56 @@ const createHarness = (initialValues = {}) => {
   };
 };
 
+test('returning to a tab adopts saved settings without rewriting storage', () => {
+  const harness = createHarness();
+  const root = new EventTarget();
+  root.document = new EventTarget();
+  root.document.visibilityState = 'visible';
+  const app = stage1.bootstrap({ ...harness.overrides, root });
+  harness.values.set(stage1.STORAGE_KEYS.video.keywords, '另一页保存的词');
+  root.dispatchEvent(new Event('focus'));
+  assert.deepEqual(app.getSettings().video.compiledKeywords, ['另一页保存的词']);
+  assert.equal(harness.controllerUpdates.at(-1).type, 'update');
+  assert.equal(harness.writes.length, 0);
+  const count = harness.controllerUpdates.length;
+  root.document.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(harness.controllerUpdates.length, count);
+  app.stop();
+  harness.values.set(stage1.STORAGE_KEYS.video.keywords, '停止后不读取');
+  root.dispatchEvent(new Event('focus'));
+  assert.equal(harness.controllerUpdates.length, count);
+});
+
+test('saved settings are read only in the foreground and read failures retain the snapshot', () => {
+  const harness = createHarness();
+  const root = new EventTarget();
+  root.document = new EventTarget();
+  root.document.visibilityState = 'hidden';
+  let failRead = false;
+  const app = stage1.bootstrap({ ...harness.overrides, root,
+    getValue(...args) {
+      if (failRead) throw new Error('private detail');
+      return harness.overrides.getValue(...args);
+    },
+  });
+  const before = app.getSettings();
+  const reads = harness.reads.length;
+  root.dispatchEvent(new Event('focus'));
+  assert.equal(harness.reads.length, reads);
+  failRead = true;
+  root.document.visibilityState = 'visible';
+  root.document.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(app.getSettings(), before);
+  assert.equal(harness.controllerUpdates.length, 1);
+  assert.equal(harness.errors.length, 1);
+  assert.equal(JSON.stringify(harness.errors).includes('private detail'), false);
+  failRead = false;
+  harness.values.set(stage1.STORAGE_KEYS.video.enabled, false);
+  root.document.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(app.getSettings().video.enabled, false);
+  app.stop();
+});
+
 test('normalizes NFKC, whitespace, case, empty entries, and duplicates', () => {
   assert.deepEqual(stage1.compileKeywords('ＡＢＣ | abc|  你\t好  ||😀|😀'), [
     'abc',
@@ -426,7 +476,11 @@ test('Stage 1 controller is inert and stores only settings snapshots', () => {
 });
 
 test('metadata grants only local storage and menu capabilities', () => {
-  assert.match(userscriptSource, /@version\s+0\.0\.3/u);
+  for (const field of ['updateURL', 'downloadURL']) {
+    const value = userscriptSource.match(new RegExp(`^// @${field}\\s+(\\S+)$`, 'mu'))?.[1];
+    assert.equal(value, 'https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js');
+  }
+  assert.match(userscriptSource, /@version\s+0\.0\.4/u);
   assert.match(userscriptSource, /@match\s+https:\/\/www\.douyin\.com\/\*/u);
   assert.match(userscriptSource, /@run-at\s+document-start/u);
   assert.match(userscriptSource, /@sandbox\s+raw/u);

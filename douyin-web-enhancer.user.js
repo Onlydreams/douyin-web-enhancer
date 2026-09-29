@@ -3,13 +3,15 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.0.3
+// @version      0.0.4
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:en  Filters recommended videos by text or BGM name and filters visible danmaku text.
 // @homepageURL  https://github.com/OnlyDreams/douyin-web-enhancer
 // @supportURL   https://github.com/OnlyDreams/douyin-web-enhancer/issues
+// @updateURL    https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js
+// @downloadURL  https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js
 // @match        https://www.douyin.com/*
 // @run-at       document-start
 // @sandbox      raw
@@ -92,6 +94,7 @@
   const CARD_DECISION_WAIT_MS = 250;
   const DANMAKU_DECISION_WAIT_MS = 100;
   const NAVIGATION_CONFIRM_MS = 2_500;
+  const NATIVE_QUEUE_WAIT_MS = 2_500;
   const PREDICTIVE_SETTLE_FALLBACK_MS = 350;
   const HEALTH_CHECK_MS = 750;
   const MAX_MUTATION_RECORDS_PER_BATCH = 64;
@@ -1015,6 +1018,7 @@
     let noticeElement = null;
     let lifecycleListening = false;
     let predictiveNavigation = null;
+    let observedNavigation = null;
     let suppressPredictiveInput = false;
     let fuseTripped = false;
     let skipTimestamps = [];
@@ -1507,6 +1511,7 @@
 
     function clearPredictiveNavigation() {
       predictiveNavigation = null;
+      observedNavigation = null;
     }
 
     function stopRootObserver() {
@@ -1716,7 +1721,7 @@
         preservedActivation.id === id &&
         card.matches(PAGE_SELECTORS.activeCard);
       if (preserveCurrent) {
-        // 运行时首次启用规则不能突袭当前稳定视频；离开后再次激活会正常重判。
+        // 启用或前台同步规则不能突袭当前视频；离开后再次激活会正常重判。
         setRecordState(record, 'bypass');
       } else if (!isValidVideoId(id)) {
         setRecordState(record, 'bypass');
@@ -1814,6 +1819,28 @@
       return transitionTrack?.contains?.(card) ? transitionTrack : currentRoot;
     }
 
+    function findVisibleLiveCard() {
+      if (!currentRoot?.isConnected || documentLike.visibilityState === 'hidden' ||
+        !isSupportedRecommendRoute(root.location.href) ||
+        currentRoot.querySelectorAll(PAGE_SELECTORS.activeCard).length) return null;
+      const roots = Array.from(documentLike.querySelectorAll(PAGE_SELECTORS.feedRoot));
+      if (roots.length !== 1 || roots[0] !== currentRoot) return null;
+      const viewport = currentRoot.getBoundingClientRect();
+      if (!(viewport.width > 0 && viewport.height > 0)) return null;
+      // 直播卡没有标准视频的 active 标记；仅接受占据 Feed 中央大部分区域的唯一直播卡。
+      const visible = Array.from(currentRoot.querySelectorAll('[data-e2e="feed-live"]')).filter(card => {
+        const rect = card.getBoundingClientRect();
+        const style = root.getComputedStyle(card);
+        return card.isConnected && style.display !== 'none' && style.visibility !== 'hidden' &&
+          rect.width > 0 && rect.height > 0 &&
+          rect.left <= viewport.left + viewport.width * 0.1 &&
+          rect.right >= viewport.right - viewport.width * 0.1 &&
+          rect.top <= viewport.top + viewport.height * 0.1 &&
+          rect.bottom >= viewport.bottom - viewport.height * 0.1;
+      });
+      return visible.length === 1 ? visible[0] : null;
+    }
+
     function isUsableNextControl(control) {
       if (!control || control.isConnected === false || typeof control.click !== 'function') {
         return false;
@@ -1855,6 +1882,11 @@
       if (!isCurrentEpoch(epoch) || epoch.state !== 'navigating') return;
       epoch.navigationTimer = null;
 
+      if (findVisibleLiveCard()) {
+        refreshActiveCard();
+        return;
+      }
+
       const activeCard = findActiveCard();
       const activeId = activeCard?.getAttribute('data-e2e-vid') ?? '';
       if (activeId && activeId !== epoch.id) {
@@ -1862,16 +1894,20 @@
         return;
       }
 
-      if (epoch.navigationAttempts < 2) {
+      if (!epoch.nativeNavigation && epoch.navigationAttempts < 2) {
         requestNavigation(epoch, true, epoch.navigationDirection);
         return;
       }
       failOpenNavigation(epoch, 'confirmation-timeout');
     }
 
-    function requestNavigation(epoch, retry = false, direction = 'down') {
+    function requestNavigation(epoch, retry = false, direction = epoch.navigationDirection) {
       if (!isCurrentEpoch(epoch)) return false;
       if ((!retry && epoch.state !== 'block') || (retry && epoch.state !== 'navigating')) {
+        return false;
+      }
+      if (direction !== 'up' && direction !== 'down') {
+        failOpenNavigation(epoch, 'entry-direction-unverified');
         return false;
       }
       if (documentLike.visibilityState === 'hidden') {
@@ -1894,6 +1930,16 @@
         return false;
       }
 
+      if (epoch.entryReadyAt !== null && now() < epoch.entryReadyAt) {
+        if (epoch.navigationTimer === null) {
+          epoch.navigationTimer = setTimeoutLike(() => {
+            epoch.navigationTimer = null;
+            if (isCurrentEpoch(epoch)) requestNavigation(epoch, false, direction);
+          }, Math.max(1, epoch.entryReadyAt - now()));
+        }
+        return false;
+      }
+
       const controls = Array.from(
         documentLike.querySelectorAll(
           direction === 'up'
@@ -1901,18 +1947,101 @@
             : PAGE_SELECTORS.nextControl,
         ),
       );
+      let nativeCandidate = null;
       if (controls.length !== 1 || !isUsableNextControl(controls[0])) {
-        failOpenNavigation(epoch, 'next-control-unavailable');
-        return false;
+        if (retry) {
+          failOpenNavigation(epoch, 'next-control-unavailable');
+          return false;
+        }
+        try {
+          const roots = Array.from(documentLike.querySelectorAll(PAGE_SELECTORS.feedRoot));
+          if (!isSupportedRecommendRoute(root.location.href) || roots.length !== 1 || roots[0] !== currentRoot) {
+            failOpenNavigation(epoch, 'root-or-route-changed');
+            return false;
+          }
+          discover(activeCard, currentRoot, candidate => { nativeCandidate = candidate; });
+          if (!nativeCandidate) {
+            failOpenNavigation(epoch, 'next-control-unavailable');
+            return false;
+          }
+          if (documentLike.activeElement?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') ||
+            documentLike.querySelectorAll('[role="dialog"][aria-modal="true"], dialog[open]').length) {
+            failOpenNavigation(epoch, 'interaction-active');
+            return false;
+          }
+          const animating = own(own(nativeCandidate, 'touchData'), 'animating');
+          if (animating === true) {
+            // 实页连续切换的动画可能超过 800ms；就绪即派发，仅复用确认上限作兜底。
+            epoch.nativeReadyDeadline ??= now() + NAVIGATION_CONFIRM_MS;
+            if (now() >= epoch.nativeReadyDeadline) {
+              failOpenNavigation(epoch, 'animation-timeout');
+              return false;
+            }
+            if (epoch.navigationTimer === null) {
+              epoch.navigationTimer = setTimeoutLike(() => {
+                epoch.navigationTimer = null;
+                if (isCurrentEpoch(epoch)) requestNavigation(epoch);
+              }, 50);
+            }
+            return false;
+          }
+          if (epoch.nativeQueueDeadline !== undefined && now() >= epoch.nativeQueueDeadline) {
+            failOpenNavigation(epoch, 'queue-timeout');
+            return false;
+          }
+          const isDisabled = own(nativeCandidate, 'isDisabled');
+          if (animating !== false || typeof isDisabled !== 'function' || isDisabled.call(nativeCandidate) !== false) {
+            failOpenNavigation(epoch, 'navigation-disabled');
+            return false;
+          }
+          let freshCandidate = null;
+          discover(activeCard, currentRoot, candidate => { freshCandidate = candidate; });
+          if (!isCurrentEpoch(epoch) || documentLike.visibilityState === 'hidden') return false;
+          const freshRoots = Array.from(documentLike.querySelectorAll(PAGE_SELECTORS.feedRoot));
+          if (!isSupportedRecommendRoute(root.location.href) || freshRoots.length !== 1 || freshRoots[0] !== currentRoot ||
+            documentLike.activeElement?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') ||
+            documentLike.querySelectorAll('[role="dialog"][aria-modal="true"], dialog[open]').length ||
+            own(own(nativeCandidate, 'touchData'), 'animating') !== false ||
+            findActiveCard() !== activeCard || activeCard.getAttribute('data-e2e-vid') !== epoch.id ||
+            freshCandidate !== nativeCandidate) {
+            failOpenNavigation(epoch, 'candidate-changed');
+            return false;
+          }
+          // 首次进入队尾时，站点的批量补队列可能尚未结束；此时 slideNext 会直接空转。
+          const queue = own(nativeCandidate, 'data');
+          const targetIndex = own(nativeCandidate, 'activeIndex') + (direction === 'up' ? -1 : 1);
+          if (!own(queue, String(targetIndex))) {
+            epoch.nativeQueueDeadline ??= now() + NATIVE_QUEUE_WAIT_MS;
+            if (epoch.navigationTimer === null) {
+              epoch.navigationTimer = setTimeoutLike(() => {
+                epoch.navigationTimer = null;
+                if (isCurrentEpoch(epoch)) requestNavigation(epoch, false, direction);
+              }, 50);
+            }
+            return false;
+          }
+        } catch (error) {
+          reportError('[抖音 Web 增强] 原生导航验证失败', error);
+          failOpenNavigation(epoch, 'native-unavailable');
+          return false;
+        }
       }
 
+      if (epoch.navigationTimer !== null) {
+        clearTimeoutLike(epoch.navigationTimer);
+        epoch.navigationTimer = null;
+      }
+      epoch.nativeNavigation = nativeCandidate !== null;
       epoch.state = 'navigating';
       setRecordState(epoch.record, 'navigating');
       epoch.navigationAttempts += 1;
       epoch.navigationDirection = direction;
 
       try {
-        controls[0].click();
+        if (nativeCandidate) own(nativeCandidate, 'emit').call(
+          nativeCandidate, direction === 'up' ? 'changePrev' : 'changeNext', { from: 'keyboard' },
+        );
+        else controls[0].click();
       } catch (error) {
         reportError('[抖音 Web 增强] 请求下一条失败', error);
         failOpenNavigation(epoch, 'click-error');
@@ -1928,15 +2057,15 @@
       return true;
     }
 
-    function findPredictiveBlockedAdjacent(direction) {
+    function findPredictiveBlockedAdjacent(direction, liveCard = null) {
       if (
         !currentRoot ||
-        !currentEpoch ||
-        !['allow', 'bypass'].includes(currentEpoch.state)
+        (!liveCard && (!currentEpoch ||
+        !['allow', 'bypass'].includes(currentEpoch.state)))
       ) {
         return null;
       }
-      const activeCard = currentEpoch.card;
+      const activeCard = liveCard ?? currentEpoch.card;
       let activeRect;
       try {
         activeRect = activeCard.getBoundingClientRect();
@@ -2007,6 +2136,12 @@
     }
 
     function handlePredictiveNavigationIntent(event) {
+      if (event?.isTrusted && currentEpoch?.state === 'block' &&
+        (currentEpoch.nativeReadyDeadline !== undefined || currentEpoch.nativeQueueDeadline !== undefined ||
+          (currentEpoch.entryReadyAt !== null && now() < currentEpoch.entryReadyAt))) {
+        failOpenNavigation(currentEpoch, 'user-input');
+        return;
+      }
       const direction = getNavigationDirection(event);
       if (
         !started ||
@@ -2016,8 +2151,16 @@
       ) {
         return;
       }
-      const candidate = findPredictiveBlockedAdjacent(direction);
-      if (!candidate) return;
+      const liveCard = findVisibleLiveCard();
+      if (liveCard) {
+        refreshActiveCard();
+        const candidate = findPredictiveBlockedAdjacent(direction, liveCard);
+        observedNavigation = {
+          generation, sourceId: '', direction,
+          targetId: candidate?.record.id ?? null, enteredAt: now(),
+        };
+        return;
+      }
       const controls = Array.from(
         documentLike.querySelectorAll(
           direction === 'up'
@@ -2025,7 +2168,20 @@
             : PAGE_SELECTORS.nextControl,
         ),
       );
-      if (controls.length !== 1 || !isUsableNextControl(controls[0])) return;
+      if (controls.length !== 1 || !isUsableNextControl(controls[0])) {
+        const cards = Array.from(currentRoot?.querySelectorAll(PAGE_SELECTORS.feedCard) ?? []);
+        const currentIndex = cards.indexOf(currentActiveCard);
+        const target = cards[currentIndex + (direction === 'up' ? -1 : 1)];
+        // 仅将可信输入与相邻卡片绑定；目的不符时放行，不把向上意图当作向下过滤。
+        observedNavigation = {
+          generation, sourceId: currentActiveId, direction,
+          targetId: currentIndex >= 0 ? target?.getAttribute('data-e2e-vid') ?? null : null,
+          enteredAt: now(),
+        };
+        return;
+      }
+      const candidate = findPredictiveBlockedAdjacent(direction);
+      if (!candidate) return;
 
       const intent = {
         generation,
@@ -2067,7 +2223,7 @@
       schedulePendingWatchdog(epoch, now() + CARD_DECISION_WAIT_MS);
     }
 
-    function activateCard(card) {
+    function activateCard(card, entryDirection = 'down', entryReadyAt = null) {
       const id = card.getAttribute('data-e2e-vid') ?? '';
       const preserveThisActivation =
         preservedActivation?.card === card && preservedActivation.id === id;
@@ -2095,7 +2251,8 @@
         state: record.state,
         retired: false,
         navigationAttempts: 0,
-        navigationDirection: 'down',
+        navigationDirection: entryDirection,
+        entryReadyAt,
         navigationTimer: null,
         decisionTimer: null,
         transitionTarget: null,
@@ -2149,7 +2306,8 @@
           finishPredictiveSettle();
         }, PREDICTIVE_SETTLE_FALLBACK_MS);
       } else if (record.state === 'block') {
-        requestNavigation(epoch);
+        if (entryDirection === 'unknown') failOpenNavigation(epoch, 'entry-direction-unverified');
+        else requestNavigation(epoch);
       } else if (record.state === 'allow') {
         startAllowDwell(epoch);
       } else if (record.state === 'pending') {
@@ -2163,7 +2321,21 @@
       }
 
       const activeCard = findActiveCard();
-      if (!activeCard) return;
+      if (!activeCard) {
+        const liveCard = findVisibleLiveCard();
+        if (!liveCard || currentActiveCard === liveCard) return;
+        const previous = retireCurrentEpoch();
+        if (previous) {
+          if (previous.state === 'navigating') recordConfirmedSkip();
+          cleanupCard(previous.card);
+          cardRecords.delete(previous.card);
+          processCard(previous.card, true);
+        }
+        clearPredictiveNavigation();
+        currentActiveCard = liveCard;
+        currentActiveId = '';
+        return;
+      }
       const activeId = activeCard.getAttribute('data-e2e-vid') ?? '';
       const activeUnchanged =
         currentActiveCard === activeCard && currentActiveId === activeId;
@@ -2171,6 +2343,17 @@
         return;
       }
 
+      const entryIntent = observedNavigation?.generation === generation &&
+        observedNavigation.sourceId === currentActiveId ? observedNavigation : null;
+      // 自动跳过连续命中卡时没有新的人工输入，沿用已确认导航的方向。
+      // 新的人工输入仍优先，避免覆盖用户途中反向操作。
+      const inheritedDirection = currentEpoch?.state === 'navigating' && currentEpoch.id !== activeId
+        ? currentEpoch.navigationDirection : 'down';
+      const entryDirection = entryIntent ?
+        (entryIntent.targetId === activeId ? entryIntent.direction : 'unknown') : inheritedDirection;
+      const entryReadyAt = entryDirection !== 'unknown' && entryIntent ?
+        entryIntent.enteredAt + 500 : null;
+      observedNavigation = null;
       const previous = retireCurrentEpoch();
       const navigationConfirmed =
         previous?.state === 'navigating' && previous.id !== activeId;
@@ -2204,7 +2387,7 @@
       currentActiveCard = activeCard;
       currentActiveId = activeId;
       danmakuSuspended = false;
-      if (hasEffectiveVideoRule()) activateCard(activeCard);
+      if (hasEffectiveVideoRule()) activateCard(activeCard, entryDirection, entryReadyAt);
     }
 
     function scheduleActiveCheck() {
@@ -2553,7 +2736,9 @@
         // 新增 script 由全局 Observer 增量处理，后续 Feed 由单飞传输观察补齐。
         syncBgmObserver();
 
-        if (!hadEffectiveVideoRule && nextHasEffectiveVideoRule) {
+        if (nextHasEffectiveVideoRule &&
+          (!hadEffectiveVideoRule || (videoChanged && !currentEpoch))) {
+          // 后台已退役 epoch；focus 同步可能早于 visibilitychange 重建，仍须保护当前卡。
           preservedActivation = captureActiveCard();
         } else if (!nextHasEffectiveVideoRule) {
           preservedActivation = null;
@@ -2659,6 +2844,103 @@
     });
   }
 
+  function own(object, key) {
+    if (!object || !['object', 'function'].includes(typeof object)) return undefined;
+    return Object.getOwnPropertyDescriptor(object, key)?.value;
+  }
+
+  function discover(card, feed, onCandidate = null) {
+    const result = { outcome: 'no-fiber', visited: 0, currentTree: false, candidates: 0, matches: [] };
+    const keys = Object.getOwnPropertyNames(card).filter(key => key.startsWith('__reactFiber$'));
+    if (keys.length !== 1) return result;
+    const seen = new Set();
+    const path = [];
+    const instances = new Map();
+    const summarize = outcome => ({ ...result, outcome, candidates: instances.size,
+      matches: [...instances.values()].slice(0, 4) });
+    let fiber = own(card, keys[0]);
+    let top = null;
+    const id = card.getAttribute('data-e2e-vid');
+    if (!/^\d{10,}$/.test(id || '')) return { ...result, outcome: 'invalid-card-id' };
+    function collect(node) {
+      const props = own(node, 'memoizedProps');
+      const swiper = own(props, 'swiper');
+      if (swiper && own(props, 'isActive') === true && own(own(props, 'item'), 'awemeId') === id) {
+        const el = own(swiper, 'el');
+        const index = own(swiper, 'activeIndex');
+        const data = own(swiper, 'data');
+        const item = Number.isInteger(index) && index >= 0 && Array.isArray(data) ? own(data, String(index)) : null;
+        const scoped = !!el && feed.contains(el) && el.contains(card);
+        instances.set(swiper, {
+          scoped,
+          indexMatches: own(item, 'awemeId') === id,
+          destroyed: own(swiper, 'destroyed') === true,
+          animating: own(own(swiper, 'touchData'), 'animating') === true,
+          hasEmit: typeof own(swiper, 'emit') === 'function',
+          hasSlideNext: typeof own(swiper, 'slideNext') === 'function',
+          hasIsDisabled: typeof own(swiper, 'isDisabled') === 'function',
+          hasPlayNextFunc: typeof own(props, 'playNextFunc') === 'function',
+        });
+      }
+    }
+    while (fiber && result.visited < 128) {
+      if (seen.has(fiber)) return summarize('fiber-cycle');
+      seen.add(fiber);
+      path.push(fiber);
+      result.visited += 1;
+      collect(fiber);
+      top = fiber;
+      fiber = own(fiber, 'return');
+    }
+    if (fiber) return summarize('depth-limit');
+    const rootState = own(top, 'stateNode');
+    const currentRoot = own(rootState, 'current');
+    result.currentTree = currentRoot === top;
+    result.resolvedAlternate = false;
+    if (!result.currentTree) {
+      // 只沿已知祖先路径验证 current 的 child/sibling 归属，不扫描整棵树。
+      instances.clear();
+      if (!currentRoot || own(top, 'alternate') !== currentRoot ||
+        own(currentRoot, 'stateNode') !== rootState) return summarize('stale-tree');
+      let current = currentRoot;
+      const currentPath = [currentRoot];
+      let inspected = 0;
+      for (let index = path.length - 2; index >= 0; index -= 1) {
+        const expected = path[index];
+        const alternate = own(expected, 'alternate');
+        let child = own(current, 'child');
+        const siblings = new Set();
+        let match = null;
+        while (child) {
+          if (++inspected > 2048 || siblings.size >= 128) return summarize('current-path-limit');
+          if (siblings.has(child)) return summarize('current-path-cycle');
+          siblings.add(child);
+          if (child === expected || child === alternate) {
+            if (match) return summarize('ambiguous-current-path');
+            match = child;
+          }
+          child = own(child, 'sibling');
+        }
+        if (!match) return summarize('current-path-missing');
+        current = match;
+        currentPath.push(current);
+      }
+      if (own(current, 'stateNode') !== card || own(rootState, 'current') !== currentRoot) {
+        return summarize('current-path-changed');
+      }
+      for (const node of currentPath) collect(node);
+      result.currentTree = true;
+      result.resolvedAlternate = true;
+    }
+    result.candidates = instances.size;
+    result.matches = [...instances.values()].slice(0, 4);
+    result.outcome = !result.currentTree ? 'stale-tree' : instances.size !== 1 ? 'candidate-count-mismatch'
+      : result.matches[0].scoped && result.matches[0].indexMatches && !result.matches[0].destroyed &&
+        result.matches[0].hasEmit && result.matches[0].hasSlideNext ? 'candidate-observed' : 'candidate-unverified';
+    if (result.outcome === 'candidate-observed' && onCandidate) onCandidate(instances.keys().next().value);
+    return result;
+  }
+
   function bootstrap(overrides = {}) {
     const root = overrides.root ?? globalThis;
     const getValue =
@@ -2693,9 +2975,8 @@
       logger?.error?.(message, errorName);
     };
 
-    let settings;
-    try {
-      settings = createSettingsSnapshot(
+    function readSavedSettings() {
+      return createSettingsSnapshot(
         Object.fromEntries(
           CATEGORY_DEFINITIONS.map(({ id }) => [
             id,
@@ -2706,6 +2987,11 @@
           ]),
         ),
       );
+    }
+
+    let settings;
+    try {
+      settings = readSavedSettings();
     } catch (error) {
       reportError('[抖音 Web 增强] 读取本地设置失败', error);
       return null;
@@ -2765,7 +3051,10 @@
         return false;
       }
 
-      const nextSettings = replaceCategorySettings(categoryId, nextCategory);
+      return applySettings(replaceCategorySettings(categoryId, nextCategory));
+    }
+
+    function applySettings(nextSettings) {
       settings = nextSettings;
       runtimeActive = readRuntimeActive();
       if (!runtimeActive) {
@@ -2892,11 +3181,30 @@
 
     refreshMenus();
 
+    let stopped = false;
+    function refreshSavedSettings() {
+      if (stopped || root.document?.visibilityState === 'hidden') return;
+      try {
+        const nextSettings = readSavedSettings();
+        if (JSON.stringify(nextSettings) !== JSON.stringify(settings)) {
+          // GM 存储在标签页间共享，但运行时快照不共享；回到本页时重新同步。
+          applySettings(nextSettings);
+        }
+      } catch (error) {
+        reportError('[抖音 Web 增强] 同步本地设置失败', error);
+      }
+    }
+    root.addEventListener?.('focus', refreshSavedSettings);
+    root.document?.addEventListener?.('visibilitychange', refreshSavedSettings);
+
     return Object.freeze({
       controller,
       getSettings: () => settings,
       refreshMenus,
       stop() {
+        stopped = true;
+        root.removeEventListener?.('focus', refreshSavedSettings);
+        root.document?.removeEventListener?.('visibilitychange', refreshSavedSettings);
         controller.stop();
         if (unregisterMenu) {
           for (const menuId of menuIds.values()) {
@@ -2915,6 +3223,7 @@
   return Object.freeze({
     CATEGORY_DEFINITIONS,
     STORAGE_KEYS,
+    discoverNativeNavigation: discover,
     bootstrap,
     compileKeywords,
     createPageController,
