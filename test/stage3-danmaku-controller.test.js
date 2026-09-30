@@ -371,6 +371,18 @@ test('initial danmaku nodes are classified across page video players', () => {
   assert.equal(inactiveBlocked.getAttribute(DANMAKU_STATE_ATTRIBUTE), 'block');
 });
 
+test('invalid danmaku ownership IDs bypass matching text and release pending hiding', () => {
+  for (const id of ['', 'invalid', '123']) {
+    const node = createDanmakuNode(id, '需要屏蔽');
+    const card = createCard('1111111111111111111', createDanmakuRoot([node]));
+    const h = createHarness({ cards: [card], activeCard: card });
+    h.controller.start(settings('屏蔽')); h.flushFrames();
+    assert.equal(node.getAttribute(DANMAKU_STATE_ATTRIBUTE), 'bypass');
+    h.controller.stop();
+    assert.equal(node.getAttribute(DANMAKU_STATE_ATTRIBUTE), null);
+  }
+});
+
 test('danmaku nodes in a sibling branch of the semantic container are classified', () => {
   const semanticRoot = createDanmakuRoot([]);
   const blocked = createDanmakuNode('1111111111111111111', '包含你');

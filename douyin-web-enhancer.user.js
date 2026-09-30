@@ -3,15 +3,13 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.0.4
+// @version      0.0.5
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:en  Filters recommended videos by text or BGM name and filters visible danmaku text.
 // @homepageURL  https://github.com/OnlyDreams/douyin-web-enhancer
 // @supportURL   https://github.com/OnlyDreams/douyin-web-enhancer/issues
-// @updateURL    https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js
-// @downloadURL  https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js
 // @match        https://www.douyin.com/*
 // @run-at       document-start
 // @sandbox      raw
@@ -1061,9 +1059,9 @@
     function fuseSignature(snapshot) {
       return JSON.stringify([
         snapshot?.video?.enabled !== false,
-        snapshot?.video?.compiledKeywords ?? [],
+        snapshot?.video?.keywords ?? '',
         snapshot?.bgm?.enabled !== false,
-        snapshot?.bgm?.compiledKeywords ?? [],
+        snapshot?.bgm?.keywords ?? '',
       ]);
     }
 
@@ -1867,6 +1865,16 @@
         clearTimeoutLike(epoch.navigationTimer);
         epoch.navigationTimer = null;
       }
+      if (epoch.decisionTimer !== null) {
+        clearTimeoutLike(epoch.decisionTimer);
+        epoch.decisionTimer = null;
+      }
+      for (const type of ['transitionend', 'transitioncancel']) {
+        epoch.transitionTarget?.removeEventListener?.(type, epoch.transitionListener);
+      }
+      epoch.transitionTarget = null;
+      epoch.transitionListener = null;
+      if (predictiveNavigation?.targetId === epoch.id) clearPredictiveNavigation();
       epoch.state = 'bypass';
       setRecordState(epoch.record, 'bypass');
       showNotice(
@@ -1901,6 +1909,35 @@
       failOpenNavigation(epoch, 'confirmation-timeout');
     }
 
+    function hasActiveInteraction() {
+      return Boolean(documentLike.activeElement?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') ||
+        documentLike.querySelectorAll('[role="dialog"][aria-modal="true"], dialog[open]').length);
+    }
+
+    function hasNavigationContext(epoch = null) {
+      if (!started || documentLike.visibilityState === 'hidden' ||
+        !currentRoot?.isConnected || !isSupportedRecommendRoute(root.location.href) ||
+        hasActiveInteraction()) return false;
+      const roots = Array.from(documentLike.querySelectorAll(PAGE_SELECTORS.feedRoot));
+      if (roots.length !== 1 || roots[0] !== currentRoot) return false;
+      return !epoch || (isCurrentEpoch(epoch) && findActiveCard() === epoch.card &&
+        epoch.card.getAttribute('data-e2e-vid') === epoch.id);
+    }
+
+    function failExpiredNavigationWait(epoch) {
+      // 迟到回调看到就绪也不能复活已到期的等待。
+      for (const [deadline, reason] of [
+        [epoch.nativeReadyDeadline, 'animation-timeout'],
+        [epoch.nativeQueueDeadline, 'queue-timeout'],
+      ]) {
+        if (deadline !== undefined && now() >= deadline) {
+          failOpenNavigation(epoch, reason);
+          return true;
+        }
+      }
+      return false;
+    }
+
     function requestNavigation(epoch, retry = false, direction = epoch.navigationDirection) {
       if (!isCurrentEpoch(epoch)) return false;
       if ((!retry && epoch.state !== 'block') || (retry && epoch.state !== 'navigating')) {
@@ -1914,7 +1951,16 @@
         failOpenNavigation(epoch, 'document-hidden');
         return false;
       }
+      if (hasActiveInteraction()) {
+        failOpenNavigation(epoch, 'interaction-active');
+        return false;
+      }
 
+      if (!hasNavigationContext(epoch)) {
+        failOpenNavigation(epoch, 'root-or-route-changed');
+        return false;
+      }
+      if (failExpiredNavigationWait(epoch)) return false;
       pruneSkipWindow();
       if (fuseTripped || skipTimestamps.length >= MAX_CONSECUTIVE_SKIPS) {
         tripFuse(epoch.record);
@@ -1948,6 +1994,7 @@
         ),
       );
       let nativeCandidate = null;
+      let navigationTargetId = null;
       if (controls.length !== 1 || !isUsableNextControl(controls[0])) {
         if (retry) {
           failOpenNavigation(epoch, 'next-control-unavailable');
@@ -1964,8 +2011,7 @@
             failOpenNavigation(epoch, 'next-control-unavailable');
             return false;
           }
-          if (documentLike.activeElement?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') ||
-            documentLike.querySelectorAll('[role="dialog"][aria-modal="true"], dialog[open]').length) {
+          if (hasActiveInteraction()) {
             failOpenNavigation(epoch, 'interaction-active');
             return false;
           }
@@ -1999,8 +2045,7 @@
           if (!isCurrentEpoch(epoch) || documentLike.visibilityState === 'hidden') return false;
           const freshRoots = Array.from(documentLike.querySelectorAll(PAGE_SELECTORS.feedRoot));
           if (!isSupportedRecommendRoute(root.location.href) || freshRoots.length !== 1 || freshRoots[0] !== currentRoot ||
-            documentLike.activeElement?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') ||
-            documentLike.querySelectorAll('[role="dialog"][aria-modal="true"], dialog[open]').length ||
+            hasActiveInteraction() ||
             own(own(nativeCandidate, 'touchData'), 'animating') !== false ||
             findActiveCard() !== activeCard || activeCard.getAttribute('data-e2e-vid') !== epoch.id ||
             freshCandidate !== nativeCandidate) {
@@ -2010,7 +2055,8 @@
           // 首次进入队尾时，站点的批量补队列可能尚未结束；此时 slideNext 会直接空转。
           const queue = own(nativeCandidate, 'data');
           const targetIndex = own(nativeCandidate, 'activeIndex') + (direction === 'up' ? -1 : 1);
-          if (!own(queue, String(targetIndex))) {
+          const target = own(queue, String(targetIndex));
+          if (!target) {
             epoch.nativeQueueDeadline ??= now() + NATIVE_QUEUE_WAIT_MS;
             if (epoch.navigationTimer === null) {
               epoch.navigationTimer = setTimeoutLike(() => {
@@ -2020,6 +2066,8 @@
             }
             return false;
           }
+          const targetId = own(target, 'awemeId');
+          navigationTargetId = isValidVideoId(targetId) ? targetId : null;
         } catch (error) {
           reportError('[抖音 Web 增强] 原生导航验证失败', error);
           failOpenNavigation(epoch, 'native-unavailable');
@@ -2031,11 +2079,24 @@
         clearTimeoutLike(epoch.navigationTimer);
         epoch.navigationTimer = null;
       }
+      if (!hasNavigationContext(epoch)) {
+        failOpenNavigation(epoch, 'root-or-route-changed');
+        return false;
+      }
+      if (failExpiredNavigationWait(epoch)) return false;
+      if (!nativeCandidate) {
+        const cards = Array.from(currentRoot.querySelectorAll(PAGE_SELECTORS.feedCard));
+        const index = cards.indexOf(activeCard);
+        const targetId = index < 0 ? null :
+          cards[index + (direction === 'up' ? -1 : 1)]?.getAttribute('data-e2e-vid');
+        navigationTargetId = isValidVideoId(targetId) ? targetId : null;
+      }
       epoch.nativeNavigation = nativeCandidate !== null;
       epoch.state = 'navigating';
       setRecordState(epoch.record, 'navigating');
       epoch.navigationAttempts += 1;
       epoch.navigationDirection = direction;
+      epoch.navigationTargetId = navigationTargetId;
 
       try {
         if (nativeCandidate) own(nativeCandidate, 'emit').call(
@@ -2136,17 +2197,16 @@
     }
 
     function handlePredictiveNavigationIntent(event) {
-      if (event?.isTrusted && currentEpoch?.state === 'block' &&
-        (currentEpoch.nativeReadyDeadline !== undefined || currentEpoch.nativeQueueDeadline !== undefined ||
-          (currentEpoch.entryReadyAt !== null && now() < currentEpoch.entryReadyAt))) {
-        failOpenNavigation(currentEpoch, 'user-input');
-        return;
-      }
+      if (!started || documentLike.visibilityState === 'hidden' || suppressPredictiveInput) return;
       const direction = getNavigationDirection(event);
+      const interrupted = event?.isTrusted && currentEpoch &&
+        (currentEpoch.state === 'navigating' || (currentEpoch.state === 'block' &&
+          (currentEpoch.nativeReadyDeadline !== undefined || currentEpoch.nativeQueueDeadline !== undefined ||
+            currentEpoch.entryReadyAt !== null || predictiveNavigation?.targetId === currentEpoch.id)));
+      if (interrupted) failOpenNavigation(currentEpoch, 'user-input');
       if (
-        !started ||
-        documentLike.visibilityState === 'hidden' ||
         !direction ||
+        !hasNavigationContext() ||
         predictiveNavigation?.sourceId === currentActiveId
       ) {
         return;
@@ -2168,20 +2228,21 @@
             : PAGE_SELECTORS.nextControl,
         ),
       );
-      if (controls.length !== 1 || !isUsableNextControl(controls[0])) {
-        const cards = Array.from(currentRoot?.querySelectorAll(PAGE_SELECTORS.feedCard) ?? []);
-        const currentIndex = cards.indexOf(currentActiveCard);
-        const target = cards[currentIndex + (direction === 'up' ? -1 : 1)];
-        // 仅将可信输入与相邻卡片绑定；目的不符时放行，不把向上意图当作向下过滤。
-        observedNavigation = {
-          generation, sourceId: currentActiveId, direction,
-          targetId: currentIndex >= 0 ? target?.getAttribute('data-e2e-vid') ?? null : null,
-          enteredAt: now(),
-        };
-        return;
-      }
+      const cards = Array.from(currentRoot?.querySelectorAll(PAGE_SELECTORS.feedCard) ?? []);
+      const currentIndex = cards.indexOf(currentActiveCard);
+      const target = cards[currentIndex + (direction === 'up' ? -1 : 1)];
+      // 方向证据不依赖目标是否已命中；目标不符时仍放行。
+      observedNavigation = {
+        generation, sourceId: currentActiveId, direction,
+        targetId: currentIndex >= 0 ? target?.getAttribute('data-e2e-vid') ?? null : null,
+        enteredAt: now(),
+      };
+      // 接管输入只记录方向，不能再拦截同一事件建立另一条脚本导航。
+      if (interrupted || controls.length !== 1 || !isUsableNextControl(controls[0])) return;
       const candidate = findPredictiveBlockedAdjacent(direction);
-      if (!candidate) return;
+      if (!candidate || !hasNavigationContext(currentEpoch)) return;
+      // 预判直达已有独立的 transitionend 沉降流程，不叠加人工进入的等待。
+      observedNavigation = null;
 
       const intent = {
         generation,
@@ -2265,6 +2326,7 @@
         predictiveNavigation?.targetId === id &&
         predictiveNavigation.generation === generation
       ) {
+        const settleIntent = predictiveNavigation;
         const finishPredictiveSettle = (event) => {
           if (
             event &&
@@ -2287,8 +2349,8 @@
             clearTimeoutLike(epoch.decisionTimer);
             epoch.decisionTimer = null;
           }
-          if (!isCurrentEpoch(epoch) || epoch.state !== 'block') return;
-          requestNavigation(epoch, false, predictiveNavigation.direction);
+          if (!isCurrentEpoch(epoch) || epoch.state !== 'block' || predictiveNavigation !== settleIntent) return;
+          requestNavigation(epoch, false, settleIntent.direction);
         };
         epoch.transitionTarget = getCardTransitionTrack(epoch.card);
         epoch.transitionListener = finishPredictiveSettle;
@@ -2345,18 +2407,18 @@
 
       const entryIntent = observedNavigation?.generation === generation &&
         observedNavigation.sourceId === currentActiveId ? observedNavigation : null;
+      const navigationConfirmed = currentEpoch?.state === 'navigating' &&
+        currentEpoch.id !== activeId && currentEpoch.navigationTargetId === activeId;
       // 自动跳过连续命中卡时没有新的人工输入，沿用已确认导航的方向。
       // 新的人工输入仍优先，避免覆盖用户途中反向操作。
-      const inheritedDirection = currentEpoch?.state === 'navigating' && currentEpoch.id !== activeId
-        ? currentEpoch.navigationDirection : 'down';
-      const entryDirection = entryIntent ?
+      const inheritedDirection = navigationConfirmed ? currentEpoch.navigationDirection :
+        currentEpoch?.state === 'navigating' ? 'unknown' : 'down';
+      let entryDirection = entryIntent ?
         (entryIntent.targetId === activeId ? entryIntent.direction : 'unknown') : inheritedDirection;
       const entryReadyAt = entryDirection !== 'unknown' && entryIntent ?
         entryIntent.enteredAt + 500 : null;
       observedNavigation = null;
       const previous = retireCurrentEpoch();
-      const navigationConfirmed =
-        previous?.state === 'navigating' && previous.id !== activeId;
       if (navigationConfirmed) {
         recordConfirmedSkip();
         cleanupCard(previous.card);
@@ -2367,7 +2429,6 @@
         activeId !== predictiveNavigation.sourceId &&
         activeId !== predictiveNavigation.targetId
       ) {
-        const activeRecord = processCard(activeCard, true);
         const predictedCard = Array.from(
           currentRoot.querySelectorAll(PAGE_SELECTORS.feedCard),
         ).find(
@@ -2378,9 +2439,11 @@
           cleanupCard(predictedCard);
           cardRecords.delete(predictedCard);
         }
-        if (activeRecord?.state === 'block') {
+        if (navigationConfirmed) {
           predictiveNavigation.targetId = activeId;
         } else {
+          // 预判目标不符也不能以命中结果反推进入方向。
+          if (!entryIntent || entryIntent.targetId !== activeId) entryDirection = 'unknown';
           clearPredictiveNavigation();
         }
       }

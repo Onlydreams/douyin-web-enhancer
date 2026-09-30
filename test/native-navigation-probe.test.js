@@ -705,3 +705,16 @@ test('history failure remains inert and unexpected discovery errors are sanitize
   assert.equal(api.snapshot().outcome, 'probe-error');
   assert.doesNotMatch(JSON.stringify(other.logs), /private/);
 });
+
+for (const mode of ['next', 'trace-next', 'series-next']) {
+test(`${mode} probe rechecks animation after the disabled predicate`, () => {
+  const f = actionFixture();
+  f.root.location.href = f.root.location.href.replace('=next', `=${mode}`);
+  f.swiper.isDisabled = () => { f.swiper.touchData.animating = true; return false; };
+  const api = probe.bootstrap(f.root); f.advance(1000);
+  assert.equal(f.calls.length, 0);
+  assert.equal(api.snapshot().outcome, 'animation-not-ready');
+  assert.equal(f.pending, null);
+  assert.equal(f.listeners.size, 0);
+});
+}

@@ -335,6 +335,7 @@
               let freshCandidate = null;
               discover(cards[0], feed, value => { freshCandidate = value; });
               if (freshCandidate !== candidate) return finish('candidate-changed');
+              if (own(own(candidate, 'touchData'), 'animating') !== false) return finish('animation-not-ready');
               if (attemptedIds.has(cardId)) return finish('already-attempted-card');
               if (mode === 'trace-next' || mode === 'series-next') {
                 trace = createNavigationTrace(candidate, () => root.performance.now());

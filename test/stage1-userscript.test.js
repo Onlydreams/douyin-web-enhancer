@@ -476,11 +476,10 @@ test('Stage 1 controller is inert and stores only settings snapshots', () => {
 });
 
 test('metadata grants only local storage and menu capabilities', () => {
-  for (const field of ['updateURL', 'downloadURL']) {
-    const value = userscriptSource.match(new RegExp(`^// @${field}\\s+(\\S+)$`, 'mu'))?.[1];
-    assert.equal(value, 'https://raw.githubusercontent.com/Onlydreams/douyin-web-enhancer/master/douyin-web-enhancer.user.js');
+  for (const field of ['updateURL', 'downloadURL', 'installURL']) {
+    assert.doesNotMatch(userscriptSource, new RegExp(`^// @${field}\\s+`, 'mu'));
   }
-  assert.match(userscriptSource, /@version\s+0\.0\.4/u);
+  assert.match(userscriptSource, /@version\s+0\.0\.5/u);
   assert.match(userscriptSource, /@match\s+https:\/\/www\.douyin\.com\/\*/u);
   assert.match(userscriptSource, /@run-at\s+document-start/u);
   assert.match(userscriptSource, /@sandbox\s+raw/u);

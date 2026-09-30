@@ -185,6 +185,7 @@ function createControllerHarness(options = {}) {
     createElement: () => createElement({ isConnected: false }),
     querySelectorAll(selector) {
       if (selector === enhancer.PAGE_SELECTORS.feedRoot) return [rootElement];
+      if (selector === '[role="dialog"][aria-modal="true"], dialog[open]') return options.modalOpen ? [{}] : [];
       if (selector === enhancer.PAGE_SELECTORS.nextControl) {
         return options.controlsAvailable === false ? [] : [nextControl];
       }
@@ -1049,8 +1050,11 @@ test('settings refresh after background teardown preserves the current card in e
     assert.equal(second.getAttribute(enhancer.VIDEO_STATE_ATTRIBUTE), 'block');
     h.switchActive(second);
     assert.equal(h.nextControl.clickCount, 1);
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
     h.switchActive(first);
-    assert.equal(h.nextControl.clickCount, 2);
+    h.advance(500); h.fireTimersByDelay(500);
+    assert.equal(h.nextControl.clickCount, 1);
+    assert.equal(h.previousControl.clickCount, 1);
   }
 });
 
@@ -1244,10 +1248,13 @@ test('reused card nodes cannot inherit a prior video decision', () => {
 });
 
 function attachNativeNavigation(harness, card, onEmit = () => {}) {
+  const cards = harness.rootElement.querySelectorAll(enhancer.PAGE_SELECTORS.feedCard);
+  const index = cards.indexOf(card);
   const swiper = {
     el: harness.rootElement, activeIndex: 1,
-    data: [{ awemeId: '8888888888888888888' },
-      { awemeId: card.getAttribute('data-e2e-vid') }, { awemeId: '9999999999999999999' }],
+    data: [{ awemeId: cards[index - 1]?.getAttribute('data-e2e-vid') ?? '8888888888888888888' },
+      { awemeId: card.getAttribute('data-e2e-vid') },
+      { awemeId: cards[index + 1]?.getAttribute('data-e2e-vid') ?? '9999999999999999999' }],
     touchData: { animating: false }, isDisabled: () => false,
     slideNext() {}, emit: onEmit,
   };
@@ -1275,6 +1282,77 @@ test('native navigation waits at the observed two-item queue tail then dispatche
   assert.deepEqual(calls, ['changeNext']);
   h.fireTimersByDelay(50);
   assert.equal(calls.length, 1);
+});
+
+test('available controls preserve upward entry when the target becomes blocked after input', () => {
+  const before = createCard('1111111111111111111', '允许').card;
+  const target = createCard('2222222222222222222', '').card;
+  const source = createCard('3333333333333333333', '允许').card;
+  source.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, target, source], activeCard: source });
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  target.setQuery(enhancer.PAGE_SELECTORS.videoDescription, [createElement({ textContent: '命中' })]);
+  h.switchActive(target);
+  h.rootElement.dispatch('transitionend', { propertyName: 'transform' });
+  assert.equal(h.nextControl.clickCount, 0);
+  assert.equal(h.previousControl.clickCount, 0);
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.equal(h.previousControl.clickCount, 1);
+  assert.equal(h.nextControl.clickCount, 0);
+});
+
+for (const type of ['keydown', 'wheel', 'click']) {
+  for (const guard of ['modal', 'focus']) {
+    test(`predictive ${type} leaves input untouched with ${guard}`, () => {
+      const source = createCard('1111111111111111111', '允许', { top: 0, bottom: 1000, height: 1000, width: 1000 }).card;
+      const target = createCard('2222222222222222222', '命中', { top: 1000, bottom: 2000, height: 1000, width: 1000 }).card;
+      source.setAttribute('data-e2e', 'feed-active-video');
+      const h = createControllerHarness({ cards: [source, target], activeCard: source, modalOpen: guard === 'modal' });
+      if (guard === 'focus') h.document.activeElement = { closest: () => ({}) };
+      h.controller.start(settings('命中')); h.flushFrames();
+      let intercepted = 0;
+      h.dispatch(type, { isTrusted: true, key: 'ArrowDown', deltaY: 100, deltaX: 0,
+        target: type === 'click' ? h.nextControl : h.rootElement,
+        preventDefault: () => intercepted++, stopImmediatePropagation: () => intercepted++ });
+      assert.equal(intercepted, 0);
+      assert.equal(h.nextControl.clickCount, 0);
+    });
+  }
+}
+
+test('manual navigation during an unconfirmed script attempt does not count as a skip', () => {
+  const before = createCard('1111111111111111111', '允许').card;
+  const blocked = createCard('2222222222222222222', '命中').card;
+  const after = createCard('3333333333333333333', '允许').card;
+  blocked.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after], activeCard: blocked });
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(h.nextControl.clickCount, 1);
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(before);
+  assert.equal(h.controller.snapshot().skipCount, 0);
+});
+
+test('raw video configuration edits clear the fuse even when matching is equivalent', () => {
+  const cards = Array.from({ length: 14 }, (_, index) => createCard(String(10_000_000_000 + index), 'CAT').card);
+  cards[0].setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards, activeCard: cards[0], autoAdvance: true });
+  h.controller.start(settings('cat')); h.flushFrames();
+  assert.equal(h.controller.snapshot().fuseTripped, true);
+  h.controller.updateSettings(settings('CAT|cat'));
+  assert.equal(h.controller.snapshot().fuseTripped, false);
+  assert.equal(h.controller.snapshot().skipCount, 0);
+});
+
+test('an unexpected destination cannot confirm a known script navigation target', () => {
+  const cards = ['命中', '允许', '其他'].map((text, index) => createCard(String(10_000_000_000 + index), text).card);
+  cards[0].setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards, activeCard: cards[0] });
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.switchActive(cards[2]);
+  assert.equal(h.controller.snapshot().skipCount, 0);
+  assert.equal(h.controller.snapshot().currentState, 'allow');
 });
 
 test('queue wait expires or cancels without dispatch and late data cannot revive it', () => {
@@ -1669,4 +1747,185 @@ test('trusted input during throttle wait cancels the pending native action', () 
   h.advance(500); h.fireTimersByDelay(500);
   assert.deepEqual(calls, []);
   assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+for (const change of ['route', 'root', 'duplicate-root']) {
+  test(`semantic throttle callback rejects changed ${change}`, () => {
+    const a = createCard('1111111111111111111', '允许').card;
+    const b = createCard('2222222222222222222', '').card;
+    a.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [a, b], activeCard: a });
+    h.controller.start(settings('命中')); h.flushFrames();
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+    b.setQuery(enhancer.PAGE_SELECTORS.videoDescription, [createElement({ textContent: '命中' })]);
+    h.switchActive(b);
+    assert.equal(h.nextControl.clickCount, 0);
+    if (change === 'route') h.setHref('https://www.douyin.com/follow');
+    else {
+      const query = h.document.querySelectorAll.bind(h.document);
+      h.document.querySelectorAll = selector => selector === enhancer.PAGE_SELECTORS.feedRoot
+        ? (change === 'root' ? [createElement()] : [h.rootElement, createElement()]) : query(selector);
+    }
+    h.advance(500); h.fireTimersByDelay(500);
+    assert.equal(h.nextControl.clickCount, 0);
+    assert.equal(h.controller.snapshot().currentState, 'bypass');
+  });
+}
+
+test('late animation readiness cannot revive an expired native wait', () => {
+  const b = createCard('1111111111111111111', '命中').card;
+  b.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [b], activeCard: b, controlsAvailable: false });
+  const calls = [];
+  const swiper = attachNativeNavigation(h, b, event => calls.push(event));
+  swiper.touchData.animating = true;
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.advance(3000); swiper.touchData.animating = false; h.fireTimersByDelay(50);
+  assert.deepEqual(calls, []);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+for (const wait of ['entry', 'animation', 'queue']) {
+  test(`manual upward entry survives cancelling a ${wait} wait`, () => {
+    const u = createCard('1111111111111111111', '命中').card;
+    const b = createCard('2222222222222222222', '命中').card;
+    const f = createCard('3333333333333333333', '允许').card;
+    f.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [u, b, f], activeCard: f, controlsAvailable: false });
+    const calls = [];
+    const swB = attachNativeNavigation(h, b, event => calls.push(['b', event]));
+    attachNativeNavigation(h, u, event => calls.push(['u', event]));
+    if (wait === 'animation') swB.touchData.animating = true;
+    if (wait === 'queue') swB.data[0] = null;
+    h.controller.start(settings('命中')); h.flushFrames();
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+    h.switchActive(b);
+    if (wait !== 'entry') { h.advance(500); h.fireTimersByDelay(500); }
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+    h.switchActive(u);
+    assert.deepEqual(calls, []);
+    h.advance(500); h.fireTimersByDelay(500);
+    assert.deepEqual(calls, [['u', 'changePrev']]);
+    h.fireTimersByDelay(50);
+    assert.equal(calls.length, 1);
+  });
+}
+
+for (const trigger of ['timer', 'transitionend']) {
+  test(`reverse input cancels predictive settling via ${trigger}`, () => {
+    const a = createCard('1111111111111111111', '允许', { top: 0, bottom: 600, height: 600, width: 800 }).card;
+    const b = createCard('2222222222222222222', '命中', { top: 612, bottom: 1212, height: 600, width: 800 }).card;
+    const c = createCard('3333333333333333333', '允许').card;
+    a.setAttribute('data-e2e', 'feed-active-video');
+    const h = createControllerHarness({ cards: [a, b, c], activeCard: a, autoAdvance: true });
+    h.controller.start(settings('命中')); h.flushFrames();
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+    assert.equal(h.nextControl.clickCount, 1);
+    h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+    if (trigger === 'timer') { h.advance(350); h.fireTimersByDelay(350); }
+    else h.rootElement.dispatch('transitionend', { propertyName: 'transform' });
+    assert.equal(h.nextControl.clickCount, 1);
+    assert.equal(h.previousControl.clickCount, 0);
+    assert.equal(h.controller.snapshot().currentState, 'bypass');
+  });
+}
+
+test('unexpected blocked destination bypasses rather than inheriting script direction', () => {
+  const cards = ['命中', '允许', '命中'].map((text, i) => createCard(String(10000000000 + i), text).card);
+  cards[0].setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards, activeCard: cards[0] });
+  h.controller.start(settings('命中')); h.flushFrames(); h.switchActive(cards[2]);
+  assert.equal(h.nextControl.clickCount, 1);
+  assert.equal(h.controller.snapshot().skipCount, 0);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('native queue targets confirm skips and trip the fuse despite different DOM neighbors', () => {
+  const blocked = Array.from({ length: 14 }, (_, i) => createCard(String(10000000000 + i), '命中').card);
+  const end = createCard('9999999999999999999', '允许').card;
+  const stale = Array.from({ length: 14 }, (_, i) => createCard(String(20000000000 + i), '允许').card);
+  const cards = blocked.flatMap((b, i) => [b, stale[i]]).concat(end);
+  blocked[0].setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards, activeCard: blocked[0], controlsAvailable: false });
+  let calls = 0;
+  blocked.forEach((b, i) => {
+    const target = blocked[i + 1] ?? end;
+    const swiper = attachNativeNavigation(h, b, () => { calls++; h.switchActive(target); });
+    swiper.data[2] = { awemeId: target.getAttribute('data-e2e-vid') };
+  });
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(calls, 12);
+  assert.equal(h.controller.snapshot().skipCount, 12);
+  assert.equal(h.controller.snapshot().fuseTripped, true);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('native site readiness calls cannot cross an existing animation deadline', () => {
+  const b = createCard('1111111111111111111', '命中').card;
+  b.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [b], activeCard: b, controlsAvailable: false });
+  let calls = 0;
+  const swiper = attachNativeNavigation(h, b, () => calls++);
+  swiper.touchData.animating = true;
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.advance(1000); swiper.touchData.animating = false;
+  swiper.isDisabled = () => { h.advance(2000); return false; };
+  h.fireTimersByDelay(50);
+  assert.equal(calls, 0);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('semantic confirmation retry rechecks the current route', () => {
+  const b = createCard('1111111111111111111', '命中').card;
+  b.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [b], activeCard: b });
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(h.nextControl.clickCount, 1);
+  h.setHref('https://www.douyin.com/follow');
+  h.advance(2500); h.fireTimersByDelay(2500);
+  assert.equal(h.nextControl.clickCount, 1);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('semantic control inspection cannot bypass the last route check', () => {
+  const b = createCard('1111111111111111111', '命中').card;
+  b.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [b], activeCard: b });
+  h.nextControl.getBoundingClientRect = () => {
+    h.setHref('https://www.douyin.com/follow');
+    return { height: 40, width: 36 };
+  };
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(h.nextControl.clickCount, 0);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('unknown native destination identity cannot continue into another blocked card', () => {
+  const a = createCard('1111111111111111111', '命中').card;
+  const b = createCard('2222222222222222222', '命中').card;
+  a.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [a, b], activeCard: a, controlsAvailable: false });
+  let calls = 0;
+  const swiper = attachNativeNavigation(h, a, () => { calls++; h.switchActive(b); });
+  swiper.data[2] = { live: true };
+  attachNativeNavigation(h, b, () => calls++);
+  h.controller.start(settings('命中')); h.flushFrames();
+  assert.equal(calls, 1);
+  assert.equal(h.controller.snapshot().skipCount, 0);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+});
+
+test('predictive input bypasses an unexpected blocked destination', () => {
+  const a = createCard('1111111111111111111', '允许', { top: 0, bottom: 600, height: 600, width: 800 }).card;
+  const b = createCard('2222222222222222222', '命中', { top: 612, bottom: 1212, height: 600, width: 800 }).card;
+  const c = createCard('3333333333333333333', '命中', { top: 1224, bottom: 1824, height: 600, width: 800 }).card;
+  a.setAttribute('data-e2e', 'feed-active-video');
+  let h;
+  h = createControllerHarness({ cards: [a, b, c], activeCard: a, onClick: () => h.switchActive(c) });
+  h.controller.start(settings('命中')); h.flushFrames();
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+  assert.equal(h.nextControl.clickCount, 1);
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+  h.advance(350); h.fireTimersByDelay(350);
+  assert.equal(h.nextControl.clickCount, 1);
 });
