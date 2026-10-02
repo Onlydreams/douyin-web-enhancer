@@ -1613,6 +1613,86 @@ test('native consecutive blocked cards inherit the confirmed upward navigation d
   assert.equal(h.controller.snapshot().currentState, 'allow');
 });
 
+test('returning downward to the same native blocked card reclassifies it after an upward skip', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blocked, event => calls.push(event));
+  h.controller.start(settings('命中')); h.flushFrames();
+
+  for (const [key, destination, event] of [
+    ['ArrowUp', before, 'changePrev'],
+    ['ArrowDown', after, 'changeNext'],
+    ['ArrowUp', before, 'changePrev'],
+    ['ArrowDown', after, 'changeNext'],
+  ]) {
+    h.dispatch('keydown', { isTrusted: true, key, target: h.document.documentElement });
+    h.switchActive(blocked);
+    assert.equal(h.controller.snapshot().currentState, 'block');
+    h.advance(500); h.fireTimersByDelay(500);
+    assert.equal(calls.at(-1), event);
+    assert.equal(h.controller.snapshot().currentState, 'navigating');
+    h.switchActive(destination);
+    assert.equal(h.controller.snapshot().currentState, 'allow');
+  }
+  assert.deepEqual(calls, ['changePrev', 'changeNext', 'changePrev', 'changeNext']);
+});
+
+test('native reentry keeps filtering when React current switches to a wide alternate sibling list', () => {
+  const before = createCard('1111111111111111111', '允许内容').card;
+  const blocked = createCard('2222222222222222222', '命中内容').card;
+  const after = createCard('3333333333333333333', '允许内容').card;
+  after.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [before, blocked, after], activeCard: after, controlsAvailable: false });
+  const calls = [];
+  attachNativeNavigation(h, blocked, event => calls.push(event));
+  const fiber = blocked.__reactFiber$test;
+  const top = fiber.return;
+  const currentFiber = { stateNode: blocked, memoizedProps: { ...fiber.memoizedProps } };
+  const alternateRoot = { stateNode: top.stateNode, child: currentFiber };
+  top.alternate = alternateRoot;
+  fiber.alternate = currentFiber;
+  let child = currentFiber;
+  for (let index = 0; index < 140; index += 1) child = { sibling: child };
+  alternateRoot.child = child;
+  h.controller.start(settings('命中')); h.flushFrames();
+
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowUp', target: h.document.documentElement });
+  h.switchActive(blocked);
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changePrev']);
+  h.switchActive(before);
+
+  top.stateNode.current = alternateRoot;
+  h.dispatch('keydown', { isTrusted: true, key: 'ArrowDown', target: h.document.documentElement });
+  h.switchActive(blocked);
+  h.advance(500); h.fireTimersByDelay(500);
+  assert.deepEqual(calls, ['changePrev', 'changeNext']);
+  assert.equal(h.controller.snapshot().currentState, 'navigating');
+  h.switchActive(after);
+  assert.equal(h.controller.snapshot().currentState, 'allow');
+});
+
+test('unverified native navigation reports bounded discovery evidence without private values', () => {
+  const card = createCard('1111111111111111111', '私有测试词').card;
+  card.setAttribute('data-e2e', 'feed-active-video');
+  const h = createControllerHarness({ cards: [card], activeCard: card, controlsAvailable: false });
+  const logs = [];
+  h.root.console.warn = (...args) => logs.push(args);
+  h.controller.start(settings('私有测试词')); h.flushFrames();
+  assert.equal(h.controller.snapshot().currentState, 'bypass');
+  assert.equal(logs.length, 2);
+  assert.equal(logs[0][0], '[抖音 Web 增强] 原生导航入口未验证');
+  assert.equal(logs[0][1].outcome, 'no-fiber');
+  assert.equal(logs[1][1], 'next-control-unavailable');
+  assert.doesNotMatch(JSON.stringify(logs), /1111111111111111111|私有测试词|awemeId|https:/u);
+  h.runHealthChecks();
+  assert.equal(logs.length, 2);
+});
+
 test('native navigation fails open when the observed upward target does not activate', () => {
   const before = createCard('1111111111111111111', '允许内容').card;
   const blocked = createCard('2222222222222222222', '命中内容').card;

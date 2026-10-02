@@ -170,7 +170,8 @@
         const siblings = new Set();
         let match = null;
         while (child) {
-          if (++inspected > 2048 || siblings.size >= 128) return summarize('current-path-limit');
+          // 与产品保持相同预算；实页祖先的兄弟列表可能超过 128。
+          if (++inspected > 2048 || siblings.size >= 512) return summarize('current-path-limit');
           if (siblings.has(child)) return summarize('current-path-cycle');
           siblings.add(child);
           if (child === expected || child === alternate) {

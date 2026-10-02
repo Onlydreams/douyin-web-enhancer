@@ -3,7 +3,7 @@
 // @name:zh-CN   抖音 Web 增强
 // @name:en      Douyin Web Enhancer
 // @namespace    https://github.com/OnlyDreams/douyin-web-enhancer
-// @version      0.0.5
+// @version      0.0.6
 // @author       Onlydreams
 // @description  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
 // @description:zh-CN  按视频文本或 BGM 名称过滤推荐视频，并按显示文本过滤弹幕。
@@ -2006,8 +2006,10 @@
             failOpenNavigation(epoch, 'root-or-route-changed');
             return false;
           }
-          discover(activeCard, currentRoot, candidate => { nativeCandidate = candidate; });
+          const discovery = discover(activeCard, currentRoot, candidate => { nativeCandidate = candidate; });
           if (!nativeCandidate) {
+            // 只记录有界校验摘要，便于区分控件缺失与 React 入口失效；不输出身份或页面数据。
+            logger?.warn?.('[抖音 Web 增强] 原生导航入口未验证', discovery);
             failOpenNavigation(epoch, 'next-control-unavailable');
             return false;
           }
@@ -2975,7 +2977,8 @@
         const siblings = new Set();
         let match = null;
         while (child) {
-          if (++inspected > 2048 || siblings.size >= 128) return summarize('current-path-limit');
+          // 实页祖先的兄弟列表超过 128；保留累计预算，避免 current 树轮换时误拒有效路径。
+          if (++inspected > 2048 || siblings.size >= 512) return summarize('current-path-limit');
           if (siblings.has(child)) return summarize('current-path-cycle');
           siblings.add(child);
           if (child === expected || child === alternate) {

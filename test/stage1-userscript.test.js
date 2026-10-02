@@ -479,7 +479,7 @@ test('metadata grants only local storage and menu capabilities', () => {
   for (const field of ['updateURL', 'downloadURL', 'installURL']) {
     assert.doesNotMatch(userscriptSource, new RegExp(`^// @${field}\\s+`, 'mu'));
   }
-  assert.match(userscriptSource, /@version\s+0\.0\.5/u);
+  assert.match(userscriptSource, /@version\s+0\.0\.6/u);
   assert.match(userscriptSource, /@match\s+https:\/\/www\.douyin\.com\/\*/u);
   assert.match(userscriptSource, /@run-at\s+document-start/u);
   assert.match(userscriptSource, /@sandbox\s+raw/u);

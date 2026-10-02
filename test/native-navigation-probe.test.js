@@ -621,7 +621,7 @@ test('current paths fail closed on missing, ambiguous, cyclic, excessive or wron
     if (reason === 'current-path-changed') f.currentFiber.stateNode = {};
     if (reason === 'current-path-limit') {
       let sibling = f.currentFiber;
-      for (let index = 0; index < 130; index += 1) { sibling.sibling = {}; sibling = sibling.sibling; }
+      for (let index = 0; index < 512; index += 1) { sibling.sibling = {}; sibling = sibling.sibling; }
     }
     const result = probe.discover(f.card, f.feed);
     assert.equal(result.outcome, reason);
